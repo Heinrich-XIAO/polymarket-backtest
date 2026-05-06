@@ -1,0 +1,18 @@
+name: Contrarian Deep Value
+description: Buy extreme underdogs after consensus has pushed probability near zero.
+
+entry:
+  condition: price_drop_pct > 0.25 and price < 0.15
+  lookback_days: 7
+
+exit:
+  take_profit: 0.50
+  stop_loss: 0.30
+
+filters:
+  min_volume: 1000
+  categories: [politics, sports, crypto, economics]
+  max_days_to_resolution: 60
+
+initial_capital: 1000.0
+stake_pct: 0.03

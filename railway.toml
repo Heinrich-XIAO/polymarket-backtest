@@ -1,0 +1,6 @@
+[build]
+builder = "dockerfile"
+
+# Railway deploys individual services — see README for setup guide.
+# Services: backend, celery-worker, frontend
+# Plugins:  PostgreSQL, Redis (add from Railway dashboard)
