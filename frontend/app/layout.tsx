@@ -25,7 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <Link href="/" className="text-slate-300 hover:text-white transition-colors">Dashboard</Link>
                 <Link href="/strategy" className="text-slate-300 hover:text-white transition-colors">Run Backtest</Link>
                 <a
-                  href="/docs"
+                  href="https://polymarket-backtest-ir3p.onrender.com/docs"
                   target="_blank"
                   className="text-slate-300 hover:text-white transition-colors"
                 >

@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useEffect, useState, useCallback, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   LineChart,
@@ -14,7 +14,7 @@ import {
   ReferenceLine,
 } from "recharts";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API = process.env.NEXT_PUBLIC_API_URL || "https://polymarket-backtest-ir3p.onrender.com";
 
 interface Metrics {
   total_pnl: number;
@@ -58,15 +58,7 @@ interface Result {
   error: string | null;
 }
 
-function MetricCard({
-  label,
-  value,
-  className = "",
-}: {
-  label: string;
-  value: string;
-  className?: string;
-}) {
+function MetricCard({ label, value, className = "" }: { label: string; value: string; className?: string }) {
   return (
     <div className="metric-card">
       <div className="metric-label">{label}</div>
@@ -75,38 +67,33 @@ function MetricCard({
   );
 }
 
-function fmt(n: number, decimals = 2) {
-  return n.toFixed(decimals);
-}
-
+function fmt(n: number, decimals = 2) { return n.toFixed(decimals); }
 function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "2-digit" });
 }
 
-export default function ResultsPage() {
-  const { id } = useParams<{ id: string }>();
+function ResultsContent() {
+  const searchParams = useSearchParams();
+  const id = searchParams.get("id");
   const [result, setResult] = useState<Result | null>(null);
   const [polling, setPolling] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const fetchResult = useCallback(async () => {
+    if (!id) { setError("No run ID provided"); setPolling(false); return; }
     try {
       const resp = await fetch(`${API}/results/${id}`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data: Result = await resp.json();
       setResult(data);
-      if (data.status === "done" || data.status === "failed") {
-        setPolling(false);
-      }
+      if (data.status === "done" || data.status === "failed") setPolling(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error fetching results");
       setPolling(false);
     }
   }, [id]);
 
-  useEffect(() => {
-    fetchResult();
-  }, [fetchResult]);
+  useEffect(() => { fetchResult(); }, [fetchResult]);
 
   useEffect(() => {
     if (!polling) return;
@@ -159,7 +146,6 @@ export default function ResultsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-100">{result.strategy_name}</h1>
@@ -169,108 +155,40 @@ export default function ResultsPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <a
-            href={`${API}/results/${id}/export`}
-            className="btn-secondary text-sm"
-            download
-          >
+          <a href={`${API}/results/${id}/export`} className="btn-secondary text-sm" download>
             Export CSV
           </a>
-          <Link href="/strategy" className="btn-primary text-sm">
-            New Backtest
-          </Link>
+          <Link href="/strategy" className="btn-primary text-sm">New Backtest</Link>
         </div>
       </div>
 
-      {/* Metrics grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <MetricCard
-          label="Total PnL"
-          value={`${m.total_pnl >= 0 ? "+" : ""}$${fmt(m.total_pnl)}`}
-          className={m.total_pnl >= 0 ? "text-green-400" : "text-red-400"}
-        />
-        <MetricCard
-          label="ROI"
-          value={`${m.roi_pct >= 0 ? "+" : ""}${fmt(m.roi_pct)}%`}
-          className={m.roi_pct >= 0 ? "text-green-400" : "text-red-400"}
-        />
-        <MetricCard
-          label="Max Drawdown"
-          value={`${fmt(m.max_drawdown_pct)}%`}
-          className="text-red-400"
-        />
-        <MetricCard
-          label="Win Rate"
-          value={`${fmt(m.win_rate_pct)}%`}
-          className={m.win_rate_pct >= 50 ? "text-green-400" : "text-yellow-400"}
-        />
-        <MetricCard
-          label="Total Trades"
-          value={String(m.total_trades)}
-          className="text-slate-100"
-        />
-        <MetricCard
-          label="Winning Trades"
-          value={`${m.winning_trades} / ${m.total_trades}`}
-          className="text-slate-100"
-        />
-        <MetricCard
-          label="Avg Hold"
-          value={`${fmt(m.avg_hold_days, 1)} days`}
-          className="text-slate-100"
-        />
-        <MetricCard
-          label="Sharpe Ratio"
-          value={m.sharpe_ratio != null ? fmt(m.sharpe_ratio) : "N/A"}
-          className={
-            m.sharpe_ratio == null
-              ? "text-slate-400"
-              : m.sharpe_ratio >= 1
-              ? "text-green-400"
-              : "text-yellow-400"
-          }
-        />
+        <MetricCard label="Total PnL" value={`${m.total_pnl >= 0 ? "+" : ""}$${fmt(m.total_pnl)}`} className={m.total_pnl >= 0 ? "text-green-400" : "text-red-400"} />
+        <MetricCard label="ROI" value={`${m.roi_pct >= 0 ? "+" : ""}${fmt(m.roi_pct)}%`} className={m.roi_pct >= 0 ? "text-green-400" : "text-red-400"} />
+        <MetricCard label="Max Drawdown" value={`${fmt(m.max_drawdown_pct)}%`} className="text-red-400" />
+        <MetricCard label="Win Rate" value={`${fmt(m.win_rate_pct)}%`} className={m.win_rate_pct >= 50 ? "text-green-400" : "text-yellow-400"} />
+        <MetricCard label="Total Trades" value={String(m.total_trades)} className="text-slate-100" />
+        <MetricCard label="Winning Trades" value={`${m.winning_trades} / ${m.total_trades}`} className="text-slate-100" />
+        <MetricCard label="Avg Hold" value={`${fmt(m.avg_hold_days, 1)} days`} className="text-slate-100" />
+        <MetricCard label="Sharpe Ratio" value={m.sharpe_ratio != null ? fmt(m.sharpe_ratio) : "N/A"} className={m.sharpe_ratio == null ? "text-slate-400" : m.sharpe_ratio >= 1 ? "text-green-400" : "text-yellow-400"} />
       </div>
 
-      {/* Equity Curve */}
       {chartData.length > 1 && (
         <div className="card">
           <h2 className="font-semibold text-slate-200 mb-4">Equity Curve</h2>
           <ResponsiveContainer width="100%" height={280}>
             <LineChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis
-                dataKey="date"
-                tick={{ fill: "#94a3b8", fontSize: 11 }}
-                tickLine={false}
-                interval={Math.max(1, Math.floor(chartData.length / 8))}
-              />
-              <YAxis
-                tick={{ fill: "#94a3b8", fontSize: 11 }}
-                tickLine={false}
-                tickFormatter={(v) => `$${v.toLocaleString()}`}
-                width={70}
-              />
-              <Tooltip
-                contentStyle={{ backgroundColor: "#1e293b", border: "1px solid #334155", borderRadius: 8 }}
-                labelStyle={{ color: "#94a3b8" }}
-                formatter={(v: number) => [`$${v.toLocaleString()}`, "Equity"]}
-              />
+              <XAxis dataKey="date" tick={{ fill: "#94a3b8", fontSize: 11 }} tickLine={false} interval={Math.max(1, Math.floor(chartData.length / 8))} />
+              <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} tickLine={false} tickFormatter={(v) => `$${v.toLocaleString()}`} width={70} />
+              <Tooltip contentStyle={{ backgroundColor: "#1e293b", border: "1px solid #334155", borderRadius: 8 }} labelStyle={{ color: "#94a3b8" }} formatter={(v: number) => [`$${v.toLocaleString()}`, "Equity"]} />
               <ReferenceLine y={initialEquity} stroke="#475569" strokeDasharray="4 4" />
-              <Line
-                type="monotone"
-                dataKey="equity"
-                stroke="#3b82f6"
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4 }}
-              />
+              <Line type="monotone" dataKey="equity" stroke="#3b82f6" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
             </LineChart>
           </ResponsiveContainer>
         </div>
       )}
 
-      {/* Trades table */}
       {result.trades.length > 0 && (
         <div className="card">
           <div className="flex items-center justify-between mb-4">
@@ -294,30 +212,16 @@ export default function ResultsPage() {
               <tbody className="divide-y divide-slate-800">
                 {result.trades.slice(0, 100).map((t, i) => (
                   <tr key={i} className="hover:bg-slate-800/50">
-                    <td className="py-2 pr-4 text-slate-300 max-w-[120px] truncate font-mono text-xs">
-                      {t.market_id.slice(0, 10)}…
-                    </td>
+                    <td className="py-2 pr-4 text-slate-300 max-w-[120px] truncate font-mono text-xs">{t.market_id.slice(0, 10)}…</td>
                     <td className="py-2 pr-4 text-slate-400 text-xs">{fmtDate(t.entry_date)}</td>
                     <td className="py-2 pr-4 text-slate-400 text-xs">{fmtDate(t.exit_date)}</td>
                     <td className="py-2 pr-4 text-slate-300">{fmt(t.entry_price, 3)}</td>
                     <td className="py-2 pr-4 text-slate-300">{fmt(t.exit_price, 3)}</td>
                     <td className="py-2 pr-4 text-slate-300">${fmt(t.stake)}</td>
-                    <td className={`py-2 pr-4 font-medium ${t.pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
-                      {t.pnl >= 0 ? "+" : ""}${fmt(t.pnl)}
-                    </td>
-                    <td className={`py-2 pr-4 font-medium ${t.pnl_pct >= 0 ? "text-green-400" : "text-red-400"}`}>
-                      {t.pnl_pct >= 0 ? "+" : ""}{fmt(t.pnl_pct)}%
-                    </td>
+                    <td className={`py-2 pr-4 font-medium ${t.pnl >= 0 ? "text-green-400" : "text-red-400"}`}>{t.pnl >= 0 ? "+" : ""}${fmt(t.pnl)}</td>
+                    <td className={`py-2 pr-4 font-medium ${t.pnl_pct >= 0 ? "text-green-400" : "text-red-400"}`}>{t.pnl_pct >= 0 ? "+" : ""}{fmt(t.pnl_pct)}%</td>
                     <td className="py-2">
-                      <span
-                        className={`badge ${
-                          t.exit_reason === "take_profit"
-                            ? "bg-green-900/50 text-green-400"
-                            : t.exit_reason === "stop_loss"
-                            ? "bg-red-900/50 text-red-400"
-                            : "bg-slate-700 text-slate-400"
-                        }`}
-                      >
+                      <span className={`badge ${t.exit_reason === "take_profit" ? "bg-green-900/50 text-green-400" : t.exit_reason === "stop_loss" ? "bg-red-900/50 text-red-400" : "bg-slate-700 text-slate-400"}`}>
                         {t.exit_reason.replace("_", " ")}
                       </span>
                     </td>
@@ -340,5 +244,13 @@ export default function ResultsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function ResultsPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center py-20 text-slate-400">Loading...</div>}>
+      <ResultsContent />
+    </Suspense>
   );
 }

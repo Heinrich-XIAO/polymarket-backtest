@@ -77,7 +77,7 @@ function StrategyForm() {
       }
 
       const data = RunSchema.parse(await resp.json());
-      router.push(`/results/${data.run_id}`);
+      router.push(`/results?id=${data.run_id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
       setLoading(false);
