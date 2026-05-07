@@ -104,16 +104,19 @@ async def _execute(run_id: str, config: dict) -> None:
         # Load market metadata
         q_params: list = []
         wheres = ["active = TRUE"]
+        # category filter only applied when DB actually has category data
         if params.categories:
             q_params.append(params.categories)
-            wheres.append(f"category = ANY(${len(q_params)})")
+            wheres.append(
+                f"(category IS NULL OR category = ANY(${len(q_params)}))"
+            )
         if params.min_volume:
             q_params.append(params.min_volume)
             wheres.append(f"volume >= ${len(q_params)}")
 
         async with pool.acquire() as conn:
             market_rows = await conn.fetch(
-                f"SELECT id, category, end_date, volume FROM markets WHERE {' AND '.join(wheres)}",
+                f"SELECT id, category, end_date, volume, daily_volume FROM markets WHERE {' AND '.join(wheres)}",
                 *q_params,
             )
 
@@ -122,6 +125,7 @@ async def _execute(run_id: str, config: dict) -> None:
                 "category": r["category"],
                 "end_date": r["end_date"],
                 "volume": float(r["volume"] or 0),
+                "daily_volume": float(r["daily_volume"] or 0),
             }
             for r in market_rows
         }

@@ -77,27 +77,29 @@ class GammaSyncer:
                 rows.append((
                     str(market_id),
                     m.get("question", ""),
-                    m.get("category"),
+                    m.get("category") or None,
                     end_date,
                     float(m.get("volume") or m.get("volumeNum") or 0),
                     bool(m.get("active", True)),
                     token_id,
+                    float(m.get("volume24hr") or 0),
                 ))
 
             if rows:
                 async with self.pool.acquire() as conn:
                     await conn.executemany(
                         """
-                        INSERT INTO markets (id, question, category, end_date, volume, active, synced_at, token_id)
-                        VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7)
+                        INSERT INTO markets (id, question, category, end_date, volume, active, synced_at, token_id, daily_volume)
+                        VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8)
                         ON CONFLICT (id) DO UPDATE SET
-                            question  = EXCLUDED.question,
-                            category  = EXCLUDED.category,
-                            end_date  = EXCLUDED.end_date,
-                            volume    = EXCLUDED.volume,
-                            active    = EXCLUDED.active,
-                            synced_at = NOW(),
-                            token_id  = COALESCE(EXCLUDED.token_id, markets.token_id)
+                            question     = EXCLUDED.question,
+                            category     = EXCLUDED.category,
+                            end_date     = EXCLUDED.end_date,
+                            volume       = EXCLUDED.volume,
+                            active       = EXCLUDED.active,
+                            synced_at    = NOW(),
+                            token_id     = COALESCE(EXCLUDED.token_id, markets.token_id),
+                            daily_volume = EXCLUDED.daily_volume
                         """,
                         rows,
                     )

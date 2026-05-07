@@ -128,8 +128,8 @@ def run_backtest(
             if df is None or df.empty:
                 continue
 
-            # Category filter
-            if params.categories and meta.get("category") not in params.categories:
+            # Category filter — skip if market has no category data
+            if params.categories and meta.get("category") and meta.get("category") not in params.categories:
                 continue
 
             # Days-to-resolution filters
@@ -197,8 +197,10 @@ def run_backtest(
             current_price = float(window.iloc[-1]["price_yes"])
             past_price = float(window.iloc[0]["price_yes"])
             clob_vol = float(window["volume"].sum()) / max(len(window), 1)
-            # Fall back to market total volume / 365 when CLOB returns no volume data
-            daily_vol = clob_vol if clob_vol > 0 else meta.get("volume", 0) / 365.0
+            # Fall back to market daily_volume (from volume24hr) or total/365
+            daily_vol = clob_vol if clob_vol > 0 else (
+                meta.get("daily_volume") or meta.get("volume", 0) / 365.0
+            )
 
             # Volume filters
             if daily_vol < params.min_volume:
