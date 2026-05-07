@@ -420,8 +420,8 @@ async def trigger_diverse_sync(
 
             logger.info("Diverse sync: inserted/updated %d competitive markets", inserted)
 
-            # Now sync price histories for newly added markets
-            await syncer.sync_all_histories(history_limit)
+            # Sync price histories prioritising competitive-price markets
+            await syncer.sync_all_histories(history_limit, prefer_competitive=True)
 
         except Exception as exc:
             logger.error("Diverse sync failed: %s", exc)

@@ -171,15 +171,27 @@ class GammaSyncer:
             )
         return len(rows)
 
-    async def sync_all_histories(self, max_markets: int = 200) -> int:
-        """Sync price history for all active markets that have a token_id."""
+    async def sync_all_histories(self, max_markets: int = 200, prefer_competitive: bool = False) -> int:
+        """Sync price history for active markets that have a token_id."""
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                """SELECT id, token_id FROM markets
-                   WHERE active = TRUE AND token_id IS NOT NULL
-                   ORDER BY volume DESC LIMIT $1""",
-                max_markets,
-            )
+            if prefer_competitive:
+                # Prefer markets where price is closest to 0.5 (most competitive)
+                rows = await conn.fetch(
+                    """SELECT id, token_id FROM markets
+                       WHERE active = TRUE AND token_id IS NOT NULL
+                         AND current_price IS NOT NULL
+                         AND current_price BETWEEN 0.1 AND 0.9
+                       ORDER BY ABS(current_price - 0.5) ASC, volume DESC
+                       LIMIT $1""",
+                    max_markets,
+                )
+            else:
+                rows = await conn.fetch(
+                    """SELECT id, token_id FROM markets
+                       WHERE active = TRUE AND token_id IS NOT NULL
+                       ORDER BY volume DESC LIMIT $1""",
+                    max_markets,
+                )
         if not rows:
             logger.warning("No markets with token_id found — run sync_markets first")
             return 0
