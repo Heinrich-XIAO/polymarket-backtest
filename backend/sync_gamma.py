@@ -1,7 +1,8 @@
-"""Sync market data from Polymarket Gamma API into PostgreSQL."""
+"""Sync market data from Polymarket Gamma API + CLOB API into PostgreSQL."""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -12,23 +13,30 @@ import httpx
 logger = logging.getLogger(__name__)
 
 GAMMA_BASE = os.environ.get("GAMMA_API_BASE", "https://gamma-api.polymarket.com")
+CLOB_BASE = "https://clob.polymarket.com"
 BATCH_SIZE = 100
 TIMEOUT = 30.0
 
 
 class GammaSyncer:
-    """Fetches markets and price history from Gamma API."""
+    """Fetches markets and price history from Polymarket APIs."""
 
     def __init__(self, pool: Any) -> None:
         self.pool = pool
-        self.client = httpx.AsyncClient(
+        self.gamma = httpx.AsyncClient(
             base_url=GAMMA_BASE,
+            timeout=TIMEOUT,
+            headers={"User-Agent": "polymarket-backtest/1.0"},
+        )
+        self.clob = httpx.AsyncClient(
+            base_url=CLOB_BASE,
             timeout=TIMEOUT,
             headers={"User-Agent": "polymarket-backtest/1.0"},
         )
 
     async def close(self) -> None:
-        await self.client.aclose()
+        await self.gamma.aclose()
+        await self.clob.aclose()
 
     async def sync_markets(self, limit: int = 500) -> int:
         """Upsert active markets from Gamma API. Returns count synced."""
@@ -37,7 +45,7 @@ class GammaSyncer:
 
         while synced < limit:
             try:
-                resp = await self.client.get(
+                resp = await self.gamma.get(
                     "/markets",
                     params={"limit": BATCH_SIZE, "offset": offset, "active": "true"},
                 )
@@ -57,6 +65,15 @@ class GammaSyncer:
                 if not market_id:
                     continue
                 end_date = _parse_dt(m.get("endDate") or m.get("end_date_iso"))
+
+                # Extract YES token ID from clobTokenIds (JSON array string or list)
+                clob_ids_raw = m.get("clobTokenIds", "[]")
+                try:
+                    clob_ids = json.loads(clob_ids_raw) if isinstance(clob_ids_raw, str) else clob_ids_raw
+                    token_id = clob_ids[0] if clob_ids else None
+                except Exception:
+                    token_id = None
+
                 rows.append((
                     str(market_id),
                     m.get("question", ""),
@@ -64,21 +81,23 @@ class GammaSyncer:
                     end_date,
                     float(m.get("volume") or m.get("volumeNum") or 0),
                     bool(m.get("active", True)),
+                    token_id,
                 ))
 
             if rows:
                 async with self.pool.acquire() as conn:
                     await conn.executemany(
                         """
-                        INSERT INTO markets (id, question, category, end_date, volume, active, synced_at)
-                        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+                        INSERT INTO markets (id, question, category, end_date, volume, active, synced_at, token_id)
+                        VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7)
                         ON CONFLICT (id) DO UPDATE SET
                             question  = EXCLUDED.question,
                             category  = EXCLUDED.category,
                             end_date  = EXCLUDED.end_date,
                             volume    = EXCLUDED.volume,
                             active    = EXCLUDED.active,
-                            synced_at = NOW()
+                            synced_at = NOW(),
+                            token_id  = COALESCE(EXCLUDED.token_id, markets.token_id)
                         """,
                         rows,
                     )
@@ -91,12 +110,12 @@ class GammaSyncer:
         logger.info("Synced %d markets", synced)
         return synced
 
-    async def sync_price_history(self, market_id: str) -> int:
-        """Fetch daily price history for one market. Returns points saved."""
+    async def sync_price_history(self, market_id: str, token_id: str) -> int:
+        """Fetch daily price history for one market via CLOB API. Returns points saved."""
         try:
-            resp = await self.client.get(
-                f"/markets/{market_id}/history",
-                params={"interval": "1d", "fidelity": 1},
+            resp = await self.clob.get(
+                "/prices-history",
+                params={"market": token_id, "interval": "max", "fidelity": "1440"},
             )
             resp.raise_for_status()
             data = resp.json()
@@ -141,19 +160,31 @@ class GammaSyncer:
         return len(rows)
 
     async def sync_all_histories(self, max_markets: int = 200) -> int:
-        """Sync price history for all active markets in DB."""
+        """Sync price history for all active markets that have a token_id."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT id FROM markets WHERE active = TRUE ORDER BY volume DESC LIMIT $1",
+                """SELECT id, token_id FROM markets
+                   WHERE active = TRUE AND token_id IS NOT NULL
+                   ORDER BY volume DESC LIMIT $1""",
                 max_markets,
             )
-        market_ids = [r["id"] for r in rows]
-        results = await asyncio.gather(
-            *[self.sync_price_history(mid) for mid in market_ids],
-            return_exceptions=True,
-        )
-        total = sum(r for r in results if isinstance(r, int))
-        logger.info("Synced %d price points for %d markets", total, len(market_ids))
+        if not rows:
+            logger.warning("No markets with token_id found — run sync_markets first")
+            return 0
+
+        # Batch concurrency to avoid rate limiting
+        total = 0
+        batch_size = 20
+        for i in range(0, len(rows), batch_size):
+            batch = rows[i:i + batch_size]
+            results = await asyncio.gather(
+                *[self.sync_price_history(r["id"], r["token_id"]) for r in batch],
+                return_exceptions=True,
+            )
+            total += sum(r for r in results if isinstance(r, int))
+            await asyncio.sleep(0.5)
+
+        logger.info("Synced %d price points for %d markets", total, len(rows))
         return total
 
 

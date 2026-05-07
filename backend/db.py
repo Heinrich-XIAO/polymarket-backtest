@@ -68,6 +68,8 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_status ON backtest_runs (status);
+
+ALTER TABLE markets ADD COLUMN IF NOT EXISTS token_id TEXT;
 """
 
 
