@@ -318,3 +318,115 @@ async def trigger_sync(
 
     background_tasks.add_task(_do_sync)
     return {"message": f"Sync started in background (max_markets={max_markets})"}
+
+
+@app.post("/admin/sync-diverse", status_code=202, tags=["admin"])
+async def trigger_diverse_sync(
+    background_tasks: BackgroundTasks,
+    fetch_pages: int = Query(20, ge=1, le=50),
+    min_price: float = Query(0.1, ge=0.01, le=0.49),
+    max_price: float = Query(0.9, ge=0.51, le=0.99),
+    history_limit: int = Query(200, ge=1, le=500),
+) -> dict[str, str]:
+    """Sync markets with competitive prices (default 0.1–0.9) for better backtests."""
+    async def _do_diverse_sync() -> None:
+        from sync_gamma import GammaSyncer
+        import json as _json
+        import httpx as _httpx
+
+        pool = await get_pool()
+        syncer = GammaSyncer(pool)
+        try:
+            # Fetch many pages from Gamma API, keep only competitive-price markets
+            inserted = 0
+            offset = 0
+            batch = 100
+            total_pages = fetch_pages
+
+            async with _httpx.AsyncClient(base_url="https://gamma-api.polymarket.com", timeout=30) as client:
+                for _ in range(total_pages):
+                    try:
+                        resp = await client.get("/markets", params={"limit": batch, "offset": offset, "active": "true"})
+                        resp.raise_for_status()
+                        markets = resp.json()
+                    except Exception as exc:
+                        logger.error("Diverse sync fetch error at offset %d: %s", offset, exc)
+                        break
+
+                    if not markets:
+                        break
+
+                    rows = []
+                    for m in markets:
+                        market_id = m.get("conditionId") or m.get("id")
+                        if not market_id:
+                            continue
+
+                        # Parse current YES price
+                        try:
+                            prices = _json.loads(m.get("outcomePrices", "[]") or "[]")
+                            yes_price = float(prices[0]) if prices else None
+                        except Exception:
+                            yes_price = None
+
+                        # Only keep markets with competitive prices
+                        if yes_price is None or not (min_price <= yes_price <= max_price):
+                            continue
+
+                        try:
+                            clob_ids = _json.loads(m.get("clobTokenIds", "[]") or "[]")
+                            token_id = clob_ids[0] if clob_ids else None
+                        except Exception:
+                            token_id = None
+
+                        from sync_gamma import _parse_dt
+                        end_date = _parse_dt(m.get("endDate") or m.get("end_date_iso"))
+
+                        rows.append((
+                            str(market_id),
+                            m.get("question", ""),
+                            m.get("category") or None,
+                            end_date,
+                            float(m.get("volume") or m.get("volumeNum") or 0),
+                            True,
+                            token_id,
+                            float(m.get("volume24hr") or 0),
+                            yes_price,
+                        ))
+
+                    if rows:
+                        async with pool.acquire() as conn:
+                            await conn.executemany(
+                                """
+                                INSERT INTO markets (id, question, category, end_date, volume, active, synced_at, token_id, daily_volume, current_price)
+                                VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9)
+                                ON CONFLICT (id) DO UPDATE SET
+                                    question      = EXCLUDED.question,
+                                    end_date      = EXCLUDED.end_date,
+                                    volume        = EXCLUDED.volume,
+                                    active        = EXCLUDED.active,
+                                    synced_at     = NOW(),
+                                    token_id      = COALESCE(EXCLUDED.token_id, markets.token_id),
+                                    daily_volume  = EXCLUDED.daily_volume,
+                                    current_price = EXCLUDED.current_price
+                                """,
+                                rows,
+                            )
+                        inserted += len(rows)
+
+                    offset += batch
+                    if len(markets) < batch:
+                        break
+
+            logger.info("Diverse sync: inserted/updated %d competitive markets", inserted)
+
+            # Now sync price histories for newly added markets
+            await syncer.sync_all_histories(history_limit)
+
+        except Exception as exc:
+            logger.error("Diverse sync failed: %s", exc)
+        finally:
+            await syncer.close()
+
+    background_tasks.add_task(_do_diverse_sync)
+    return {"message": f"Diverse sync started: fetching {fetch_pages} pages, price {min_price}–{max_price}, history for {history_limit} markets"}

@@ -74,6 +74,14 @@ class GammaSyncer:
                 except Exception:
                     token_id = None
 
+                # Extract current YES price from outcomePrices
+                outcome_prices_raw = m.get("outcomePrices", "[]")
+                try:
+                    outcome_prices = json.loads(outcome_prices_raw) if isinstance(outcome_prices_raw, str) else outcome_prices_raw
+                    current_price = float(outcome_prices[0]) if outcome_prices else None
+                except Exception:
+                    current_price = None
+
                 rows.append((
                     str(market_id),
                     m.get("question", ""),
@@ -83,23 +91,25 @@ class GammaSyncer:
                     bool(m.get("active", True)),
                     token_id,
                     float(m.get("volume24hr") or 0),
+                    current_price,
                 ))
 
             if rows:
                 async with self.pool.acquire() as conn:
                     await conn.executemany(
                         """
-                        INSERT INTO markets (id, question, category, end_date, volume, active, synced_at, token_id, daily_volume)
-                        VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8)
+                        INSERT INTO markets (id, question, category, end_date, volume, active, synced_at, token_id, daily_volume, current_price)
+                        VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9)
                         ON CONFLICT (id) DO UPDATE SET
-                            question     = EXCLUDED.question,
-                            category     = EXCLUDED.category,
-                            end_date     = EXCLUDED.end_date,
-                            volume       = EXCLUDED.volume,
-                            active       = EXCLUDED.active,
-                            synced_at    = NOW(),
-                            token_id     = COALESCE(EXCLUDED.token_id, markets.token_id),
-                            daily_volume = EXCLUDED.daily_volume
+                            question      = EXCLUDED.question,
+                            category      = EXCLUDED.category,
+                            end_date      = EXCLUDED.end_date,
+                            volume        = EXCLUDED.volume,
+                            active        = EXCLUDED.active,
+                            synced_at     = NOW(),
+                            token_id      = COALESCE(EXCLUDED.token_id, markets.token_id),
+                            daily_volume  = EXCLUDED.daily_volume,
+                            current_price = EXCLUDED.current_price
                         """,
                         rows,
                     )
