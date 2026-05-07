@@ -26,7 +26,7 @@ class StrategyParams:
     min_volume: float = 1000.0
     max_volume: float | None = None          # cap for low-volume arb strategies
     categories: list[str] = field(default_factory=list)
-    max_days_to_resolution: int = 365
+    max_days_to_resolution: int = 9999
     min_days_to_resolution: int = 0          # floor for resolution_sniper
     initial_capital: float = 1000.0
     stake_pct: float = 0.05
