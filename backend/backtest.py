@@ -26,7 +26,7 @@ class StrategyParams:
     min_volume: float = 1000.0
     max_volume: float | None = None          # cap for low-volume arb strategies
     categories: list[str] = field(default_factory=list)
-    max_days_to_resolution: int = 30
+    max_days_to_resolution: int = 365
     min_days_to_resolution: int = 0          # floor for resolution_sniper
     initial_capital: float = 1000.0
     stake_pct: float = 0.05
@@ -196,7 +196,9 @@ def run_backtest(
 
             current_price = float(window.iloc[-1]["price_yes"])
             past_price = float(window.iloc[0]["price_yes"])
-            daily_vol = float(window["volume"].sum()) / max(len(window), 1)
+            clob_vol = float(window["volume"].sum()) / max(len(window), 1)
+            # Fall back to market total volume / 365 when CLOB returns no volume data
+            daily_vol = clob_vol if clob_vol > 0 else meta.get("volume", 0) / 365.0
 
             # Volume filters
             if daily_vol < params.min_volume:
