@@ -14,7 +14,7 @@ from typing import Any
 import yaml
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 
 from db import close_pool, get_pool, init_db
 from models import BacktestRequest, BacktestRunStatus, HealthResponse
@@ -37,6 +37,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/", include_in_schema=False)
+async def root() -> RedirectResponse:
+    return RedirectResponse(url="/docs")
 
 
 @app.on_event("startup")
@@ -105,7 +110,10 @@ async def get_strategy(name: str) -> dict[str, Any]:
 # ── Backtest ──────────────────────────────────────────────────────────────────
 
 @app.post("/backtest/run", status_code=202, tags=["backtest"])
-async def run_backtest_endpoint(req: BacktestRequest) -> dict[str, str]:
+async def run_backtest_endpoint(
+    req: BacktestRequest,
+    background_tasks: BackgroundTasks,
+) -> dict[str, str]:
     """Start a backtest run. Returns run_id for polling."""
     if req.strategy_name:
         yaml_file = STRATEGIES_DIR / f"{req.strategy_name}.yaml"
@@ -136,7 +144,13 @@ async def run_backtest_endpoint(req: BacktestRequest) -> dict[str, str]:
             json.dumps(config),
         )
 
-    run_backtest_task.delay(run_id, config)
+    try:
+        run_backtest_task.delay(run_id, config)
+    except Exception:
+        # Celery not available — run in-process via FastAPI BackgroundTasks
+        from tasks import _execute
+        background_tasks.add_task(_execute, run_id, config)
+
     return {"run_id": run_id}
 
 
