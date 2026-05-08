@@ -298,6 +298,19 @@ async def list_markets(
 
 # ── Sync trigger (admin) ──────────────────────────────────────────────────────
 
+@app.post("/admin/reset-stuck-runs", tags=["admin"])
+async def reset_stuck_runs() -> dict[str, Any]:
+    """Mark all pending/running runs as failed (cleanup after server restart)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE backtest_runs SET status='failed', error='Server restarted', completed_at=NOW() "
+            "WHERE status IN ('pending', 'running')"
+        )
+    count = int(result.split()[-1])
+    return {"reset": count}
+
+
 @app.post("/admin/sync", status_code=202, tags=["admin"])
 async def trigger_sync(
     background_tasks: BackgroundTasks,
