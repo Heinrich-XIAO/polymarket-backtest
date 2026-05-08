@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import asyncpg
@@ -149,7 +150,13 @@ async def _execute(run_id: str, config: dict) -> None:
                 "UPDATE backtest_runs SET progress_pct=60 WHERE run_id=$1", run_id
             )
 
-        result = run_backtest(price_data, market_meta, params, start_date, end_date)
+        # Run CPU-bound simulation in a thread to avoid blocking the asyncio event loop
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            result = await loop.run_in_executor(
+                executor,
+                lambda: run_backtest(price_data, market_meta, params, start_date, end_date),
+            )
 
         async with pool.acquire() as conn:
             await conn.execute(
