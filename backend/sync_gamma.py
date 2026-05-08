@@ -426,6 +426,197 @@ class GammaSyncer:
         logger.info("Synced %d price points for %d markets (fidelity=%d)", total, len(rows), fidelity)
         return total
 
+    # ── Data API (data-api.polymarket.com) ────────────────────────────────────
+
+    async def sync_trades_for_market(self, market_id: str) -> int:
+        """Fetch all historical trades from data-api.polymarket.com, aggregate to daily candles."""
+        from collections import defaultdict
+        DATA_API = "https://data-api.polymarket.com"
+        all_trades: list[dict] = []
+        offset = 0
+        limit = 500  # keep each request small
+
+        async with httpx.AsyncClient(base_url=DATA_API, timeout=60.0,
+                                     headers={"User-Agent": "polymarket-backtest/1.0"}) as client:
+            while len(all_trades) < 100_000:  # safety cap per market
+                try:
+                    resp = await client.get("/trades", params={
+                        "market": market_id,
+                        "limit": limit,
+                        "offset": offset,
+                    })
+                    resp.raise_for_status()
+                    trades = resp.json()
+                except Exception as exc:
+                    logger.debug("Data API error for %s: %s", market_id, exc)
+                    break
+                if not trades:
+                    break
+                all_trades.extend(trades)
+                if len(trades) < limit:
+                    break
+                offset += limit
+                await asyncio.sleep(0.05)
+
+        if not all_trades:
+            return 0
+
+        # Aggregate trades to daily price candles
+        daily: dict = defaultdict(lambda: {"prices": [], "volume": 0.0})
+        for t in all_trades:
+            try:
+                ts_raw = t.get("timestamp") or t.get("createdAt")
+                price_f = float(t["price"])
+                if ts_raw is None or not (0.001 < price_f < 0.999):
+                    continue
+                ts = _parse_ts(ts_raw)
+                d = ts.date()
+                daily[d]["prices"].append(price_f)
+                daily[d]["volume"] += float(t.get("usdAmount") or t.get("size") or 0)
+            except Exception:
+                continue
+
+        rows = []
+        for d, data in sorted(daily.items()):
+            if not data["prices"]:
+                continue
+            avg_price = sum(data["prices"]) / len(data["prices"])
+            ts = datetime.combine(d, datetime.min.time(), tzinfo=timezone.utc)
+            rows.append((market_id, ts, round(avg_price, 6), round(data["volume"], 2)))
+
+        if not rows:
+            return 0
+
+        async with self.pool.acquire() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO price_history (market_id, timestamp, price_yes, volume)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (market_id, timestamp) DO UPDATE SET
+                    price_yes = EXCLUDED.price_yes,
+                    volume    = EXCLUDED.volume
+                """,
+                rows,
+            )
+        return len(rows)
+
+    async def sync_data_api_histories(self, max_markets: int = 200) -> int:
+        """Sync trade-based daily candles from data-api.polymarket.com for top-volume markets."""
+        async with self.pool.acquire() as conn:
+            market_rows = await conn.fetch(
+                """SELECT id FROM markets
+                   WHERE volume > 0
+                   ORDER BY volume DESC LIMIT $1""",
+                max_markets,
+            )
+        if not market_rows:
+            return 0
+
+        total = 0
+        batch_size = 10  # conservative — each market may have many pages
+        for i in range(0, len(market_rows), batch_size):
+            batch = market_rows[i:i + batch_size]
+            results = await asyncio.gather(
+                *[self.sync_trades_for_market(r["id"]) for r in batch],
+                return_exceptions=True,
+            )
+            total += sum(r for r in results if isinstance(r, int))
+            await asyncio.sleep(1.0)
+
+        logger.info("Data API sync: %d price points for %d markets", total, len(market_rows))
+        return total
+
+    # ── HuggingFace datasets-server ───────────────────────────────────────────
+
+    async def sync_hf_markets(self, limit: int = 5000) -> int:
+        """Import market metadata from HuggingFace SII-WANGZJ/Polymarket_data (538k markets)."""
+        HF_API = "https://datasets-server.huggingface.co"
+        DATASET = "SII-WANGZJ/Polymarket_data"
+        PAGE = 100
+        inserted = 0
+
+        async with httpx.AsyncClient(base_url=HF_API, timeout=60.0) as client:
+            for offset in range(0, limit, PAGE):
+                try:
+                    resp = await client.get("/rows", params={
+                        "dataset": DATASET,
+                        "config": "default",
+                        "split": "markets",
+                        "offset": offset,
+                        "length": PAGE,
+                    })
+                    resp.raise_for_status()
+                    data = resp.json()
+                except Exception as exc:
+                    logger.error("HF API error at offset %d: %s", offset, exc)
+                    break
+
+                row_items = data.get("rows", [])
+                if not row_items:
+                    break
+
+                rows = []
+                for item in row_items:
+                    r = item.get("row", {})
+                    # HF dataset schema: conditionId, question, token1, token2, outcome_prices, volume, end_date
+                    market_id = r.get("conditionId") or r.get("token1")
+                    if not market_id:
+                        continue
+                    end_date = _parse_dt(r.get("endDate") or r.get("end_date"))
+                    # outcome_prices may be "[0.65, 0.35]" string or list
+                    yes_price = None
+                    try:
+                        op = r.get("outcomePrices") or r.get("outcome_prices") or "[]"
+                        if isinstance(op, str):
+                            import re
+                            nums = re.findall(r"[\d.]+", op)
+                            yes_price = float(nums[0]) if nums else None
+                        elif isinstance(op, list):
+                            yes_price = float(op[0]) if op else None
+                    except Exception:
+                        pass
+
+                    # Use token1 as token_id for CLOB price history lookup
+                    token_id = r.get("token1") or None
+
+                    rows.append((
+                        str(market_id),
+                        r.get("question", ""),
+                        r.get("category") or None,
+                        end_date,
+                        float(r.get("volume") or r.get("volumeNum") or 0),
+                        bool(r.get("active", False)),
+                        token_id,
+                        0.0,
+                        yes_price,
+                    ))
+
+                if rows:
+                    async with self.pool.acquire() as conn:
+                        await conn.executemany(
+                            """
+                            INSERT INTO markets (id, question, category, end_date, volume, active, synced_at, token_id, daily_volume, current_price)
+                            VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9)
+                            ON CONFLICT (id) DO UPDATE SET
+                                question      = EXCLUDED.question,
+                                category      = COALESCE(EXCLUDED.category, markets.category),
+                                volume        = GREATEST(EXCLUDED.volume, markets.volume),
+                                active        = EXCLUDED.active,
+                                synced_at     = NOW(),
+                                token_id      = COALESCE(markets.token_id, EXCLUDED.token_id),
+                                current_price = COALESCE(markets.current_price, EXCLUDED.current_price)
+                            """,
+                            rows,
+                        )
+                    inserted += len(rows)
+
+                if len(row_items) < PAGE:
+                    break
+                await asyncio.sleep(0.2)
+
+        logger.info("HuggingFace markets imported: %d", inserted)
+        return inserted
+
 
 def _parse_dt(raw: str | None) -> datetime | None:
     if not raw:

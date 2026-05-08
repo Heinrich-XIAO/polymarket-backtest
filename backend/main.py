@@ -406,6 +406,48 @@ async def trigger_hourly_sync(
     return {"message": f"Hourly candles sync started for top {max_markets} competitive markets"}
 
 
+@app.post("/admin/sync-data-api", status_code=202, tags=["admin"])
+async def trigger_data_api_sync(
+    background_tasks: BackgroundTasks,
+    max_markets: int = Query(200, ge=1, le=1000),
+) -> dict[str, str]:
+    """Sync trade-based price history from data-api.polymarket.com (real executed prices)."""
+    async def _do_sync() -> None:
+        from sync_gamma import GammaSyncer
+        pool = await get_pool()
+        syncer = GammaSyncer(pool)
+        try:
+            await syncer.sync_data_api_histories(max_markets=max_markets)
+        except Exception as exc:
+            logger.error("Data API sync failed: %s", exc)
+        finally:
+            await syncer.close()
+
+    background_tasks.add_task(_do_sync)
+    return {"message": f"Data API trade history sync started for top {max_markets} markets"}
+
+
+@app.post("/admin/sync-hf-markets", status_code=202, tags=["admin"])
+async def trigger_hf_markets_sync(
+    background_tasks: BackgroundTasks,
+    limit: int = Query(5000, ge=100, le=50000),
+) -> dict[str, str]:
+    """Bulk import up to 538k market metadata from HuggingFace SII-WANGZJ/Polymarket_data."""
+    async def _do_sync() -> None:
+        from sync_gamma import GammaSyncer
+        pool = await get_pool()
+        syncer = GammaSyncer(pool)
+        try:
+            await syncer.sync_hf_markets(limit=limit)
+        except Exception as exc:
+            logger.error("HF markets sync failed: %s", exc)
+        finally:
+            await syncer.close()
+
+    background_tasks.add_task(_do_sync)
+    return {"message": f"HuggingFace markets sync started (limit={limit})"}
+
+
 @app.post("/admin/sync-diverse", status_code=202, tags=["admin"])
 async def trigger_diverse_sync(
     background_tasks: BackgroundTasks,
