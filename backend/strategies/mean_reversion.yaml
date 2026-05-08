@@ -2,7 +2,7 @@ name: Mean Reversion
 description: Buy when price drops significantly in the lookback window, expecting recovery toward fair value.
 
 entry:
-  condition: price_drop_pct > 0.08
+  condition: price_drop_pct > 0.15
   lookback_days: 7
 
 exit:
