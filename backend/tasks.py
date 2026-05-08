@@ -116,7 +116,12 @@ async def _execute(run_id: str, config: dict) -> None:
 
         async with pool.acquire() as conn:
             market_rows = await conn.fetch(
-                f"SELECT id, category, end_date, volume, daily_volume FROM markets WHERE {' AND '.join(wheres)}",
+                f"""
+                SELECT m.id, m.category, m.end_date, m.volume, m.daily_volume
+                FROM markets m
+                INNER JOIN (SELECT DISTINCT market_id FROM price_history) ph ON m.id = ph.market_id
+                WHERE {' AND '.join(wheres)}
+                """,
                 *q_params,
             )
 
