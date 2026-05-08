@@ -529,7 +529,7 @@ class GammaSyncer:
     # ── HuggingFace datasets-server ───────────────────────────────────────────
 
     async def sync_hf_markets(self, limit: int = 5000) -> int:
-        """Import market metadata from HuggingFace SII-WANGZJ/Polymarket_data (538k markets)."""
+        """Import market metadata from HuggingFace SII-WANGZJ/Polymarket_data (train split)."""
         HF_API = "https://datasets-server.huggingface.co"
         DATASET = "SII-WANGZJ/Polymarket_data"
         PAGE = 100
@@ -541,7 +541,7 @@ class GammaSyncer:
                     resp = await client.get("/rows", params={
                         "dataset": DATASET,
                         "config": "default",
-                        "split": "markets",
+                        "split": "train",
                         "offset": offset,
                         "length": PAGE,
                     })
@@ -579,12 +579,15 @@ class GammaSyncer:
                     # Use token1 as token_id for CLOB price history lookup
                     token_id = r.get("token1") or None
 
+                    vol = float(r.get("volume") or r.get("volumeNum") or 0)
+                    if vol < 100:  # skip zero-volume auto-generated markets
+                        continue
                     rows.append((
                         str(market_id),
                         r.get("question", ""),
                         r.get("category") or None,
                         end_date,
-                        float(r.get("volume") or r.get("volumeNum") or 0),
+                        vol,
                         bool(r.get("active", False)),
                         token_id,
                         0.0,
