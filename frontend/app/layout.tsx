@@ -24,6 +24,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <div className="flex items-center gap-6 text-sm">
                 <Link href="/" className="text-slate-300 hover:text-white transition-colors">Dashboard</Link>
                 <Link href="/strategy" className="text-slate-300 hover:text-white transition-colors">Run Backtest</Link>
+                <Link href="/sweep" className="text-slate-300 hover:text-white transition-colors">Sweep</Link>
                 <a
                   href="https://polymarket-backtest-ir3p.onrender.com/docs"
                   target="_blank"

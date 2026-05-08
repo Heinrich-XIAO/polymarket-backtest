@@ -17,8 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
 
 from db import close_pool, get_pool, init_db
-from models import BacktestRequest, BacktestRunStatus, HealthResponse
-from tasks import run_backtest_task
+from models import BacktestRequest, BacktestRunStatus, HealthResponse, SweepRequest
+from tasks import run_backtest_task, _execute_sweep_bg
 
 logger = logging.getLogger(__name__)
 
@@ -559,6 +559,208 @@ async def trigger_diverse_sync(
     background_tasks.add_task(_do_diverse_sync)
     return {"message": f"Diverse sync started: fetching {fetch_pages} pages, price {min_price}–{max_price}, history for {history_limit} markets"}
 
+
+# ── Sweep ─────────────────────────────────────────────────────────────────────
+
+def _generate_combinations(req: SweepRequest) -> list[dict]:
+    """Cartesian product of all sweep axes, capped at max_combinations."""
+    from itertools import product
+    import copy
+
+    def base_dict() -> dict:
+        b = req.base_config.model_dump()
+        return {
+            "name": b.get("name", "Custom"),
+            "entry": {
+                "condition": b.get("entry", {}).get("condition", "price_drop_pct > 0.08"),
+                "lookback_days": b.get("entry", {}).get("lookback_days", 7),
+            },
+            "exit": {
+                "take_profit": b.get("exit", {}).get("take_profit", 0.20),
+                "stop_loss": b.get("exit", {}).get("stop_loss", 0.10),
+            },
+            "filters": {
+                "min_volume": b.get("filters", {}).get("min_volume", 1000.0),
+                "categories": b.get("filters", {}).get("categories", []),
+                "max_days_to_resolution": b.get("filters", {}).get("max_days_to_resolution", 9999),
+            },
+            "initial_capital": req.initial_capital,
+            "stake_pct": b.get("stake_pct", 0.05),
+        }
+
+    axes: list[tuple[str, list]] = []
+    if req.entry_conditions:
+        axes.append(("entry_condition", req.entry_conditions))
+    if req.lookback_days:
+        axes.append(("lookback_days", [int(v) for v in req.lookback_days]))
+    if req.take_profit:
+        axes.append(("take_profit", [float(v) for v in req.take_profit]))
+    if req.stop_loss:
+        axes.append(("stop_loss", [float(v) for v in req.stop_loss]))
+    if req.min_volume:
+        axes.append(("min_volume", [float(v) for v in req.min_volume]))
+    if req.max_days_to_resolution:
+        axes.append(("max_days_to_resolution", [int(v) for v in req.max_days_to_resolution]))
+    if req.stake_pct:
+        axes.append(("stake_pct", [float(v) for v in req.stake_pct]))
+
+    if not axes:
+        cfg = base_dict()
+        cfg["name"] = req.name or "Custom"
+        return [cfg]
+
+    param_names = [a[0] for a in axes]
+    value_lists = [a[1] for a in axes]
+
+    combos: list[dict] = []
+    for vals in product(*value_lists):
+        cfg = base_dict()
+        label_parts = []
+        for pname, val in zip(param_names, vals):
+            if pname == "entry_condition":
+                cfg["entry"]["condition"] = val
+                label_parts.append(f"cond={str(val)[:20]}")
+            elif pname == "lookback_days":
+                cfg["entry"]["lookback_days"] = int(val)
+                label_parts.append(f"lb={val}d")
+            elif pname == "take_profit":
+                cfg["exit"]["take_profit"] = float(val)
+                label_parts.append(f"tp={int(float(val)*100)}%")
+            elif pname == "stop_loss":
+                cfg["exit"]["stop_loss"] = float(val)
+                label_parts.append(f"sl={int(float(val)*100)}%")
+            elif pname == "min_volume":
+                cfg["filters"]["min_volume"] = float(val)
+                label_parts.append(f"vol>={int(float(val))}")
+            elif pname == "max_days_to_resolution":
+                cfg["filters"]["max_days_to_resolution"] = int(val)
+                label_parts.append(f"days<={val}")
+            elif pname == "stake_pct":
+                cfg["stake_pct"] = float(val)
+                label_parts.append(f"stk={int(float(val)*100)}%")
+        cfg["name"] = f"[{','.join(label_parts)}]"
+        combos.append(cfg)
+
+    return combos[:req.max_combinations]
+
+
+def _describe_params(config: dict) -> dict:
+    entry = config.get("entry", {})
+    exit_ = config.get("exit", {})
+    filters = config.get("filters", {})
+    return {
+        "entry_condition": entry.get("condition", ""),
+        "lookback_days": entry.get("lookback_days", 7),
+        "take_profit": exit_.get("take_profit", 0),
+        "stop_loss": exit_.get("stop_loss", 0),
+        "min_volume": filters.get("min_volume", 0),
+        "max_days_to_resolution": filters.get("max_days_to_resolution", 9999),
+        "stake_pct": config.get("stake_pct", 0.05),
+        "categories": filters.get("categories", []),
+    }
+
+
+@app.post("/backtest/sweep", status_code=202, tags=["backtest"])
+async def run_sweep(
+    req: SweepRequest,
+    background_tasks: BackgroundTasks,
+) -> dict[str, str]:
+    """Launch a parameter sweep: all combinations run sequentially, returns a ranked leaderboard."""
+    combinations = _generate_combinations(req)
+    if not combinations:
+        raise HTTPException(400, "No combinations generated — check sweep parameters")
+
+    sweep_id = str(uuid.uuid4())
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        active = int(
+            await conn.fetchval("SELECT COUNT(*) FROM backtest_sweeps WHERE status='running'") or 0
+        )
+        if active >= 1:
+            raise HTTPException(429, "A sweep is already running — wait for it to finish")
+
+        await conn.execute(
+            """
+            INSERT INTO backtest_sweeps (sweep_id, name, base_config, status, total_runs)
+            VALUES ($1, $2, $3, 'running', $4)
+            """,
+            sweep_id,
+            req.name,
+            json.dumps(req.base_config.model_dump()),
+            len(combinations),
+        )
+
+        run_id_config_pairs: list[tuple[str, dict]] = []
+        for cfg in combinations:
+            run_id = str(uuid.uuid4())
+            await conn.execute(
+                """
+                INSERT INTO backtest_runs (run_id, strategy_name, strategy_config, status, sweep_id)
+                VALUES ($1, $2, $3, 'pending', $4)
+                """,
+                run_id,
+                cfg.get("name", "sweep_run")[:200],
+                json.dumps(cfg),
+                sweep_id,
+            )
+            run_id_config_pairs.append((run_id, cfg))
+
+    background_tasks.add_task(
+        _execute_sweep_bg, sweep_id, run_id_config_pairs, req.start_date, req.end_date
+    )
+    return {"sweep_id": sweep_id}
+
+
+@app.get("/sweep/{sweep_id}", tags=["backtest"])
+async def get_sweep(sweep_id: str) -> dict[str, Any]:
+    """Get sweep status and all run results, sorted by ROI descending."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        sweep_row = await conn.fetchrow(
+            "SELECT sweep_id, name, status, total_runs, done_runs, created_at, completed_at "
+            "FROM backtest_sweeps WHERE sweep_id=$1",
+            sweep_id,
+        )
+        if not sweep_row:
+            raise HTTPException(404, "Sweep not found")
+
+        run_rows = await conn.fetch(
+            """
+            SELECT run_id, strategy_name, strategy_config, status, metrics, completed_at, error
+            FROM backtest_runs WHERE sweep_id=$1
+            ORDER BY
+                CASE WHEN metrics IS NOT NULL THEN (metrics->>'roi_pct')::float ELSE -999999 END DESC
+            """,
+            sweep_id,
+        )
+
+    runs = []
+    for r in run_rows:
+        cfg = json.loads(r["strategy_config"]) if r["strategy_config"] else {}
+        runs.append({
+            "run_id": r["run_id"],
+            "name": r["strategy_name"],
+            "params": _describe_params(cfg),
+            "status": r["status"],
+            "metrics": json.loads(r["metrics"]) if r["metrics"] else None,
+            "completed_at": r["completed_at"].isoformat() if r["completed_at"] else None,
+            "error": r["error"],
+        })
+
+    return {
+        "sweep_id": sweep_row["sweep_id"],
+        "name": sweep_row["name"],
+        "status": sweep_row["status"],
+        "total_runs": sweep_row["total_runs"],
+        "done_runs": sweep_row["done_runs"],
+        "created_at": sweep_row["created_at"].isoformat(),
+        "completed_at": sweep_row["completed_at"].isoformat() if sweep_row["completed_at"] else None,
+        "runs": runs,
+    }
+
+
+# ── Admin ──────────────────────────────────────────────────────────────────────
 
 @app.post("/admin/recategorize-markets", status_code=200, tags=["admin"])
 async def recategorize_markets() -> dict[str, Any]:

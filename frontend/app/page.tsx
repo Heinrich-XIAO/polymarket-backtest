@@ -101,6 +101,9 @@ export default function Dashboard() {
           <Link href="/strategy" className="btn-primary">
             Run a Backtest
           </Link>
+          <Link href="/sweep" className="btn-secondary">
+            Parameter Sweep
+          </Link>
           <a href={`${API}/docs`} target="_blank" className="btn-secondary">
             API Docs
           </a>

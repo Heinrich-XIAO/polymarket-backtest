@@ -72,6 +72,19 @@ CREATE INDEX IF NOT EXISTS idx_runs_status ON backtest_runs (status);
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS token_id TEXT;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS daily_volume DOUBLE PRECISION DEFAULT 0;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS current_price DOUBLE PRECISION;
+
+CREATE TABLE IF NOT EXISTS backtest_sweeps (
+    sweep_id     TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    base_config  JSONB NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'running',
+    total_runs   INT DEFAULT 0,
+    done_runs    INT DEFAULT 0,
+    created_at   TIMESTAMPTZ DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
+);
+
+ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS sweep_id TEXT;
 """
 
 

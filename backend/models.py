@@ -107,3 +107,20 @@ class HealthResponse(BaseModel):
     price_points: int
     latest_price: str | None = None
     version: str = "1.0.0"
+
+
+class SweepRequest(BaseModel):
+    name: str = "Parameter Sweep"
+    base_config: StrategyConfig
+    # Lists of values to try for each param — cartesian product = combinations
+    entry_conditions: list[str] = []
+    lookback_days: list[int] = []
+    take_profit: list[float] = []
+    stop_loss: list[float] = []
+    min_volume: list[float] = []
+    max_days_to_resolution: list[int] = []
+    stake_pct: list[float] = []
+    initial_capital: float = Field(default=1000.0, gt=0)
+    start_date: datetime | None = None
+    end_date: datetime | None = None
+    max_combinations: int = Field(default=50, ge=1, le=100)
