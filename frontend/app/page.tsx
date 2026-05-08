@@ -159,7 +159,7 @@ export default function Dashboard() {
           </div>
           <div>
             <div className="text-slate-200 font-medium mb-1">Slippage</div>
-            <code className="text-blue-300 text-xs">min(1%, 1000 / daily_volume)</code>
+            <code className="text-blue-300 text-xs">min(0.5%, 100 / daily_volume)</code>
             <p className="mt-1">Decreases as volume increases.</p>
           </div>
           <div>

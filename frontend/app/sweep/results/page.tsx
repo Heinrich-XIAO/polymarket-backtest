@@ -32,6 +32,7 @@ interface SweepRun {
   };
   status: string;
   metrics: RunMetrics | null;
+  completed_at: string | null;
   error: string | null;
 }
 

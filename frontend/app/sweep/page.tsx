@@ -31,8 +31,8 @@ function ChipInput({
     const v = input.trim().replace(/,\s*$/, "");
     if (v && !chips.includes(v)) {
       onAdd(v);
-      setInput("");
     }
+    if (v) setInput("");
   }
 
   return (
