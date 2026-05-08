@@ -86,6 +86,30 @@ def simulate_fill(price: float, side: str, daily_volume: float, spread: float | 
     return float(np.clip(exec_price, MIN_PRICE, MAX_PRICE))
 
 
+def _index_price_data(
+    price_data: dict[str, pd.DataFrame],
+) -> dict[str, tuple[list, dict]]:
+    """Pre-index each market's price data for O(1) date lookups.
+
+    Returns {market_id: (sorted_records, date_to_idx)} where
+    sorted_records is list of (date, price_yes, volume) and
+    date_to_idx maps date → index of last record for that date.
+    """
+    indexed: dict[str, tuple[list, dict]] = {}
+    for mid, df in price_data.items():
+        if df.empty:
+            continue
+        df2 = df.copy()
+        df2["_date"] = df2["timestamp"].dt.date
+        df2 = df2.sort_values("timestamp")
+        records = list(zip(df2["_date"].tolist(), df2["price_yes"].tolist(), df2["volume"].tolist()))
+        date_to_idx: dict = {}
+        for i, (d, _, _) in enumerate(records):
+            date_to_idx[d] = i  # last index for this date wins
+        indexed[mid] = (records, date_to_idx)
+    return indexed
+
+
 def run_backtest(
     price_data: dict[str, pd.DataFrame],
     market_meta: dict[str, dict[str, Any]],
@@ -120,13 +144,17 @@ def run_backtest(
     if not sorted_dates:
         return _empty_result()
 
+    # Pre-index price data for fast date lookups
+    indexed = _index_price_data(price_data)
+
     open_positions: dict[str, dict[str, Any]] = {}
 
     for current_date in sorted_dates:
         for market_id, meta in market_meta.items():
-            df = price_data.get(market_id)
-            if df is None or df.empty:
+            idx_data = indexed.get(market_id)
+            if idx_data is None:
                 continue
+            records, date_to_idx = idx_data
 
             # Category filter — skip if market has no category data
             if params.categories and meta.get("category") and meta.get("category") not in params.categories:
@@ -145,15 +173,19 @@ def run_backtest(
                 if days_left < params.min_days_to_resolution:
                     continue
 
-            current_rows = df[df["timestamp"].dt.date == current_date]
+            # O(1) lookup for current date data
+            cur_idx = date_to_idx.get(current_date)
+            if cur_idx is None:
+                if market_id not in open_positions:
+                    continue
 
             # ── Manage open position ──────────────────────────────────────────
             if market_id in open_positions:
-                if current_rows.empty:
+                if cur_idx is None:
                     continue
                 pos = open_positions[market_id]
-                current_price = float(current_rows.iloc[-1]["price_yes"])
-                volume = float(current_rows["volume"].sum())
+                current_price = float(records[cur_idx][1])
+                volume = float(records[cur_idx][2])
                 exit_exec = simulate_fill(current_price, "SELL", volume)
                 pnl_pct = (exit_exec - pos["entry_exec_price"]) / pos["entry_exec_price"]
 
@@ -186,17 +218,19 @@ def run_backtest(
                 continue
 
             # ── Look for entry signal ─────────────────────────────────────────
+            if cur_idx is None:
+                continue
             lb_start = current_date - timedelta(days=params.lookback_days)
-            window = df[
-                (df["timestamp"].dt.date >= lb_start) &
-                (df["timestamp"].dt.date <= current_date)
-            ]
+            # Slice records for the lookback window using sorted list
+            end_i = cur_idx + 1
+            start_i = max(0, end_i - params.lookback_days - 1)
+            window = [r for r in records[start_i:end_i] if r[0] >= lb_start]
             if len(window) < 2:
                 continue
 
-            current_price = float(window.iloc[-1]["price_yes"])
-            past_price = float(window.iloc[0]["price_yes"])
-            clob_vol = float(window["volume"].sum()) / max(len(window), 1)
+            current_price = float(window[-1][1])
+            past_price = float(window[0][1])
+            clob_vol = sum(r[2] for r in window) / len(window)
             # Fall back to market daily_volume (from volume24hr) or total/365
             daily_vol = clob_vol if clob_vol > 0 else (
                 meta.get("daily_volume") or meta.get("volume", 0) / 365.0
@@ -250,29 +284,30 @@ def run_backtest(
 
     # Force-close remaining positions at last known price
     for market_id, pos in list(open_positions.items()):
-        df = price_data.get(market_id)
-        if df is not None and not df.empty:
-            last_row = df.iloc[-1]
-            last_price = float(last_row["price_yes"])
-            last_vol = float(last_row["volume"])
-            exit_exec = simulate_fill(last_price, "SELL", last_vol)
-            pnl_pct = (exit_exec - pos["entry_exec_price"]) / pos["entry_exec_price"]
-            pnl = pos["stake"] * pnl_pct
-            capital += pos["stake"] + pnl
-            last_dt = equity_points[-1][0] if equity_points else datetime.utcnow()
-            trades.append(TradeRecord(
-                market_id=market_id,
-                entry_date=pos["entry_date"],
-                exit_date=last_dt,
-                entry_price=pos["entry_price"],
-                exit_price=last_price,
-                position="yes",
-                stake=round(pos["stake"], 4),
-                pnl=round(pnl, 4),
-                pnl_pct=round(pnl_pct * 100, 2),
-                hold_days=(last_dt.date() - pos["entry_date"].date()).days,
-                exit_reason="end_of_period",
-            ))
+        idx_data = indexed.get(market_id)
+        if idx_data is None:
+            continue
+        records, _ = idx_data
+        last_price = float(records[-1][1])
+        last_vol = float(records[-1][2])
+        exit_exec = simulate_fill(last_price, "SELL", last_vol)
+        pnl_pct = (exit_exec - pos["entry_exec_price"]) / pos["entry_exec_price"]
+        pnl = pos["stake"] * pnl_pct
+        capital += pos["stake"] + pnl
+        last_dt = equity_points[-1][0] if equity_points else datetime.utcnow()
+        trades.append(TradeRecord(
+            market_id=market_id,
+            entry_date=pos["entry_date"],
+            exit_date=last_dt,
+            entry_price=pos["entry_price"],
+            exit_price=last_price,
+            position="yes",
+            stake=round(pos["stake"], 4),
+            pnl=round(pnl, 4),
+            pnl_pct=round(pnl_pct * 100, 2),
+            hold_days=(last_dt.date() - pos["entry_date"].date()).days,
+            exit_reason="end_of_period",
+        ))
 
     return {
         "metrics": compute_metrics(trades, equity_points, params.initial_capital),
