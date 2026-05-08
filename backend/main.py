@@ -134,6 +134,15 @@ async def run_backtest_endpoint(
     run_id = str(uuid.uuid4())
     pool = await get_pool()
     async with pool.acquire() as conn:
+        # Limit to 2 concurrent backtests to prevent OOM on free tier
+        active = int(
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM backtest_runs WHERE status IN ('pending','running')"
+            ) or 0
+        )
+        if active >= 2:
+            raise HTTPException(429, "Too many concurrent backtests — please wait for a running test to finish")
+
         await conn.execute(
             """
             INSERT INTO backtest_runs (run_id, strategy_name, strategy_config, status)
