@@ -558,3 +558,25 @@ async def trigger_diverse_sync(
 
     background_tasks.add_task(_do_diverse_sync)
     return {"message": f"Diverse sync started: fetching {fetch_pages} pages, price {min_price}–{max_price}, history for {history_limit} markets"}
+
+
+@app.post("/admin/recategorize-markets", status_code=200, tags=["admin"])
+async def recategorize_markets() -> dict[str, Any]:
+    """Retroactively assign categories to all NULL-category markets using keyword matching."""
+    from sync_gamma import _assign_category
+    pool = await get_pool()
+    updated = 0
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, question FROM markets WHERE category IS NULL AND question != ''"
+        )
+        for row in rows:
+            cat = _assign_category(row["question"])
+            if cat:
+                await conn.execute(
+                    "UPDATE markets SET category = $1 WHERE id = $2",
+                    cat, row["id"],
+                )
+                updated += 1
+    logger.info("Recategorized %d markets", updated)
+    return {"updated": updated, "total_null": len(rows)}

@@ -17,6 +17,46 @@ CLOB_BASE = "https://clob.polymarket.com"
 BATCH_SIZE = 100
 TIMEOUT = 30.0
 
+_CATEGORY_KEYWORDS: list[tuple[str, list[str]]] = [
+    ("politics", [
+        "election", "president", "congress", "senate", "vote", "democrat", "republican",
+        "biden", "trump", "harris", "primary", "ballot", "governor", "parliament",
+        "minister", "party", "political", "government", "campaign", "inauguration",
+        "supreme court", "legislation", "impeach", "poll ",
+    ]),
+    ("crypto", [
+        "bitcoin", "ethereum", "btc", "eth", "sol", "solana", "crypto", "blockchain",
+        "altcoin", "defi", "nft", "token", "binance", "coinbase", "matic", "polygon",
+        "avalanche", "avax", "doge", "dogecoin", "xrp", "ripple", "cardano", "ada",
+        "halving", "satoshi",
+    ]),
+    ("economics", [
+        "gdp", "inflation", "cpi", "fed ", "federal reserve", "interest rate", "economy",
+        "recession", "unemployment", "jobs", "payroll", "stock market", "s&p", "nasdaq",
+        "dow jones", "oil price", "gold price", "bond", "yield", "ipo",
+    ]),
+    ("sports", [
+        "nfl", "nba", "mlb", "nhl", "soccer", "football", "basketball", "baseball",
+        "championship", "super bowl", "world cup", "olympics", "tennis", "golf",
+        "match", "tournament", "playoffs", "league", "team", "player", "coach",
+        "mls", "ufc", "boxing", "formula 1", "f1", "derby",
+    ]),
+    ("entertainment", [
+        "oscar", "academy award", "emmy", "grammy", "box office", "movie", "film",
+        "season", "episode", "tv show", "celebrity", "singer", "actor", "album",
+        "music", "award", "billie", "taylor swift",
+    ]),
+]
+
+
+def _assign_category(question: str) -> str | None:
+    """Assign category by keyword-matching the market question."""
+    q = question.lower()
+    for category, keywords in _CATEGORY_KEYWORDS:
+        if any(kw in q for kw in keywords):
+            return category
+    return None
+
 
 class GammaSyncer:
     """Fetches markets and price history from Polymarket APIs."""
@@ -82,10 +122,12 @@ class GammaSyncer:
                 except Exception:
                     current_price = None
 
+                question = m.get("question", "")
+                category = m.get("category") or _assign_category(question)
                 rows.append((
                     str(market_id),
-                    m.get("question", ""),
-                    m.get("category") or None,
+                    question,
+                    category,
                     end_date,
                     float(m.get("volume") or m.get("volumeNum") or 0),
                     bool(m.get("active", True)),
@@ -223,10 +265,11 @@ class GammaSyncer:
                         current_price = float(outcome_prices[0]) if outcome_prices else None
                     except Exception:
                         current_price = None
+                    q2 = m.get("question", "")
                     rows.append((
                         str(market_id),
-                        m.get("question", ""),
-                        m.get("category") or None,
+                        q2,
+                        m.get("category") or _assign_category(q2),
                         end_date,
                         float(m.get("volume") or m.get("volumeNum") or 0),
                         True,
@@ -332,10 +375,11 @@ class GammaSyncer:
                     if current_price is not None:
                         resolved_price = current_price
 
+                q3 = m.get("question", "")
                 rows.append((
                     str(market_id),
-                    m.get("question", ""),
-                    m.get("category") or None,
+                    q3,
+                    m.get("category") or _assign_category(q3),
                     end_date,
                     float(m.get("volume") or m.get("volumeNum") or 0),
                     False,  # active = False for resolved markets
