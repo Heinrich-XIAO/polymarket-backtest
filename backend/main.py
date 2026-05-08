@@ -364,13 +364,55 @@ async def trigger_near_resolution_sync(
     return {"message": f"Near-resolution sync started: markets ending within {max_days} days, limit={limit}"}
 
 
+@app.post("/admin/sync-resolved", status_code=202, tags=["admin"])
+async def trigger_resolved_sync(
+    background_tasks: BackgroundTasks,
+    limit: int = Query(500, ge=1, le=2000),
+) -> dict[str, str]:
+    """Sync resolved (closed) markets + their price histories. Gold for backtesting real outcomes."""
+    async def _do_sync() -> None:
+        from sync_gamma import GammaSyncer
+        pool = await get_pool()
+        syncer = GammaSyncer(pool)
+        try:
+            await syncer.sync_resolved_markets(limit=limit)
+        except Exception as exc:
+            logger.error("Resolved sync failed: %s", exc)
+        finally:
+            await syncer.close()
+
+    background_tasks.add_task(_do_sync)
+    return {"message": f"Resolved markets sync started (limit={limit})"}
+
+
+@app.post("/admin/sync-hourly", status_code=202, tags=["admin"])
+async def trigger_hourly_sync(
+    background_tasks: BackgroundTasks,
+    max_markets: int = Query(100, ge=1, le=300),
+) -> dict[str, str]:
+    """Sync hourly (fidelity=60) price candles for top competitive markets."""
+    async def _do_sync() -> None:
+        from sync_gamma import GammaSyncer
+        pool = await get_pool()
+        syncer = GammaSyncer(pool)
+        try:
+            await syncer.sync_all_histories(max_markets=max_markets, prefer_competitive=True, fidelity=60)
+        except Exception as exc:
+            logger.error("Hourly sync failed: %s", exc)
+        finally:
+            await syncer.close()
+
+    background_tasks.add_task(_do_sync)
+    return {"message": f"Hourly candles sync started for top {max_markets} competitive markets"}
+
+
 @app.post("/admin/sync-diverse", status_code=202, tags=["admin"])
 async def trigger_diverse_sync(
     background_tasks: BackgroundTasks,
-    fetch_pages: int = Query(20, ge=1, le=50),
+    fetch_pages: int = Query(20, ge=1, le=150),
     min_price: float = Query(0.1, ge=0.01, le=0.49),
     max_price: float = Query(0.9, ge=0.51, le=0.99),
-    history_limit: int = Query(200, ge=1, le=500),
+    history_limit: int = Query(200, ge=1, le=1000),
 ) -> dict[str, str]:
     """Sync markets with competitive prices (default 0.1–0.9) for better backtests."""
     async def _do_diverse_sync() -> None:
