@@ -156,8 +156,8 @@ def run_backtest(
                 continue
             records, date_to_idx = idx_data
 
-            # Category filter — skip if market has no category data
-            if params.categories and meta.get("category") and meta.get("category") not in params.categories:
+            # Category filter — only trade in markets with matching category (NULL markets excluded)
+            if params.categories and (meta.get("category") or "").lower() not in [c.lower() for c in params.categories]:
                 continue
 
             # Days-to-resolution filters

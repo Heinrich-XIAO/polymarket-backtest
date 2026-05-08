@@ -10,9 +10,9 @@ exit:
   stop_loss: 0.06
 
 filters:
-  min_volume: 1000
+  min_volume: 3000
   categories: [sports]
-  max_days_to_resolution: 10
+  max_days_to_resolution: 9999
 
 initial_capital: 1000.0
 stake_pct: 0.05
