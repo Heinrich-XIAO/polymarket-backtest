@@ -14,7 +14,7 @@ import {
   ReferenceLine,
 } from "recharts";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "https://polymarket-backtest-ir3p.onrender.com";
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 interface Metrics {
   total_pnl: number;
