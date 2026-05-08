@@ -45,7 +45,7 @@ class StrategyParams:
             min_volume=float(filters.get("min_volume", 1000.0)),
             max_volume=float(filters["max_volume"]) if filters.get("max_volume") else None,
             categories=list(filters.get("categories", [])),
-            max_days_to_resolution=int(filters.get("max_days_to_resolution", 30)),
+            max_days_to_resolution=int(filters.get("max_days_to_resolution", 9999)),
             min_days_to_resolution=int(filters.get("min_days_to_resolution", 0)),
             initial_capital=float(d.get("initial_capital", 1000.0)),
             stake_pct=float(d.get("stake_pct", 0.05)),

@@ -171,6 +171,114 @@ class GammaSyncer:
             )
         return len(rows)
 
+    async def sync_near_resolution(self, max_days: int = 90, limit: int = 200) -> int:
+        """Sync markets ending within max_days, then fetch their price histories."""
+        from datetime import date, timedelta
+        today = date.today()
+        end_date_max = (today + timedelta(days=max_days)).isoformat()
+        end_date_min = today.isoformat()
+
+        inserted = 0
+        offset = 0
+        fetched_ids: list[tuple[str, str | None]] = []
+
+        async with httpx.AsyncClient(base_url=GAMMA_BASE, timeout=TIMEOUT) as client:
+            while len(fetched_ids) < limit:
+                try:
+                    resp = await client.get(
+                        "/markets",
+                        params={
+                            "limit": BATCH_SIZE,
+                            "offset": offset,
+                            "active": "true",
+                            "end_date_min": end_date_min,
+                            "end_date_max": end_date_max,
+                        },
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                except Exception as exc:
+                    logger.error("near-resolution sync error at offset %d: %s", offset, exc)
+                    break
+
+                markets = data if isinstance(data, list) else data.get("markets", [])
+                if not markets:
+                    break
+
+                rows = []
+                for m in markets:
+                    market_id = m.get("conditionId") or m.get("id")
+                    if not market_id:
+                        continue
+                    end_date = _parse_dt(m.get("endDate") or m.get("end_date_iso"))
+                    clob_ids_raw = m.get("clobTokenIds", "[]")
+                    try:
+                        clob_ids = json.loads(clob_ids_raw) if isinstance(clob_ids_raw, str) else clob_ids_raw
+                        token_id = clob_ids[0] if clob_ids else None
+                    except Exception:
+                        token_id = None
+                    outcome_prices_raw = m.get("outcomePrices", "[]")
+                    try:
+                        outcome_prices = json.loads(outcome_prices_raw) if isinstance(outcome_prices_raw, str) else outcome_prices_raw
+                        current_price = float(outcome_prices[0]) if outcome_prices else None
+                    except Exception:
+                        current_price = None
+                    rows.append((
+                        str(market_id),
+                        m.get("question", ""),
+                        m.get("category") or None,
+                        end_date,
+                        float(m.get("volume") or m.get("volumeNum") or 0),
+                        True,
+                        token_id,
+                        float(m.get("volume24hr") or 0),
+                        current_price,
+                    ))
+                    if token_id:
+                        fetched_ids.append((str(market_id), token_id))
+
+                if rows:
+                    async with self.pool.acquire() as conn:
+                        await conn.executemany(
+                            """
+                            INSERT INTO markets (id, question, category, end_date, volume, active, synced_at, token_id, daily_volume, current_price)
+                            VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9)
+                            ON CONFLICT (id) DO UPDATE SET
+                                question      = EXCLUDED.question,
+                                category      = EXCLUDED.category,
+                                end_date      = EXCLUDED.end_date,
+                                volume        = EXCLUDED.volume,
+                                active        = EXCLUDED.active,
+                                synced_at     = NOW(),
+                                token_id      = COALESCE(EXCLUDED.token_id, markets.token_id),
+                                daily_volume  = EXCLUDED.daily_volume,
+                                current_price = EXCLUDED.current_price
+                            """,
+                            rows,
+                        )
+                    inserted += len(rows)
+
+                if len(markets) < BATCH_SIZE:
+                    break
+                offset += BATCH_SIZE
+
+        logger.info("Near-resolution sync: %d markets (within %d days)", inserted, max_days)
+
+        # Sync price histories for the new near-resolution markets
+        total_pts = 0
+        batch_size = 20
+        for i in range(0, len(fetched_ids), batch_size):
+            batch = fetched_ids[i:i + batch_size]
+            results = await asyncio.gather(
+                *[self.sync_price_history(mid, tid) for mid, tid in batch],
+                return_exceptions=True,
+            )
+            total_pts += sum(r for r in results if isinstance(r, int))
+            await asyncio.sleep(0.5)
+
+        logger.info("Near-resolution histories: %d price points", total_pts)
+        return inserted
+
     async def sync_all_histories(self, max_markets: int = 200, prefer_competitive: bool = False) -> int:
         """Sync price history for active markets that have a token_id."""
         async with self.pool.acquire() as conn:

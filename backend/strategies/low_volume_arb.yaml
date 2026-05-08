@@ -13,7 +13,7 @@ filters:
   min_volume: 10
   max_volume: 1000
   categories: []
-  max_days_to_resolution: 45
+  max_days_to_resolution: 9999
 
 initial_capital: 1000.0
 stake_pct: 0.02

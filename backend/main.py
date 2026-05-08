@@ -320,6 +320,28 @@ async def trigger_sync(
     return {"message": f"Sync started in background (max_markets={max_markets})"}
 
 
+@app.post("/admin/sync-near-resolution", status_code=202, tags=["admin"])
+async def trigger_near_resolution_sync(
+    background_tasks: BackgroundTasks,
+    max_days: int = Query(90, ge=1, le=365),
+    limit: int = Query(200, ge=1, le=500),
+) -> dict[str, str]:
+    """Sync markets ending within max_days. Feeds resolution_fade, resolution_sniper, etc."""
+    async def _do_sync() -> None:
+        from sync_gamma import GammaSyncer
+        pool = await get_pool()
+        syncer = GammaSyncer(pool)
+        try:
+            await syncer.sync_near_resolution(max_days=max_days, limit=limit)
+        except Exception as exc:
+            logger.error("Near-resolution sync failed: %s", exc)
+        finally:
+            await syncer.close()
+
+    background_tasks.add_task(_do_sync)
+    return {"message": f"Near-resolution sync started: markets ending within {max_days} days, limit={limit}"}
+
+
 @app.post("/admin/sync-diverse", status_code=202, tags=["admin"])
 async def trigger_diverse_sync(
     background_tasks: BackgroundTasks,
