@@ -2,8 +2,7 @@
 
 import { useEffect, useState, Suspense } from "react";
 import { useRouter } from "next/navigation";
-
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { API, fetchWithRetry } from "../lib/api";
 
 interface Preset {
   file: string;
@@ -143,6 +142,7 @@ function SweepBuilder() {
   const [swStakePct, setSwStakePct] = useState<string[]>([]);
 
   const [loading, setLoading] = useState(false);
+  const [warmingUp, setWarmingUp] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -209,11 +209,12 @@ function SweepBuilder() {
     };
 
     try {
-      const resp = await fetch(`${API}/backtest/sweep`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const resp = await fetchWithRetry(
+        `${API}/backtest/sweep`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+        { onWarmingUp: () => setWarmingUp(true) }
+      );
+      setWarmingUp(false);
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
         throw new Error(err.detail || `HTTP ${resp.status}`);
@@ -222,6 +223,7 @@ function SweepBuilder() {
       router.push(`/sweep/results?id=${sweep_id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
+      setWarmingUp(false);
       setLoading(false);
     }
   }
@@ -465,7 +467,7 @@ function SweepBuilder() {
         </div>
         <button type="submit" disabled={loading} className="btn-primary">
           {loading
-            ? "Launching…"
+            ? warmingUp ? "Backend warming up…" : "Launching…"
             : `Run ${combos} Combination${combos !== 1 ? "s" : ""} →`}
         </button>
       </div>

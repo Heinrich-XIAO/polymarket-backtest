@@ -3,8 +3,7 @@
 import { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { z } from "zod";
-
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { API, fetchWithRetry } from "../lib/api";
 
 const RunSchema = z.object({
   run_id: z.string(),
@@ -31,6 +30,7 @@ function StrategyForm() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [loading, setLoading] = useState(false);
+  const [warmingUp, setWarmingUp] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -65,11 +65,12 @@ function StrategyForm() {
     if (endDate) body.end_date = new Date(endDate).toISOString();
 
     try {
-      const resp = await fetch(`${API}/backtest/run`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const resp = await fetchWithRetry(
+        `${API}/backtest/run`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+        { onWarmingUp: () => setWarmingUp(true) }
+      );
+      setWarmingUp(false);
 
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
@@ -80,6 +81,7 @@ function StrategyForm() {
       router.push(`/results?id=${data.run_id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
+      setWarmingUp(false);
       setLoading(false);
     }
   }
@@ -198,7 +200,7 @@ function StrategyForm() {
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
               </svg>
-              Starting backtest...
+              {warmingUp ? "Backend warming up…" : "Starting backtest…"}
             </span>
           ) : "Run Backtest"}
         </button>
