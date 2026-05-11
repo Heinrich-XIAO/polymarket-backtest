@@ -103,28 +103,38 @@ async def _execute(run_id: str, config: dict) -> None:
         end_date = datetime.fromisoformat(config["end_date"]) if config.get("end_date") else None
 
         # Load market metadata
-        q_params: list = []
-        wheres = ["active = TRUE"]
-        # category filter only applied when DB actually has category data
-        if params.categories:
-            q_params.append(params.categories)
-            wheres.append(
-                f"(category IS NULL OR category = ANY(${len(q_params)}))"
-            )
-        if params.min_volume:
-            q_params.append(params.min_volume)
-            wheres.append(f"volume >= ${len(q_params)}")
-
         async with pool.acquire() as conn:
-            market_rows = await conn.fetch(
-                f"""
-                SELECT m.id, m.category, m.end_date, m.volume, m.daily_volume
-                FROM markets m
-                INNER JOIN (SELECT DISTINCT market_id FROM price_history) ph ON m.id = ph.market_id
-                WHERE {' AND '.join(wheres)}
-                """,
-                *q_params,
-            )
+            if params.market_ids:
+                # User explicitly selected markets — load them regardless of active/volume status
+                market_rows = await conn.fetch(
+                    """
+                    SELECT m.id, m.category, m.end_date, m.volume, m.daily_volume
+                    FROM markets m
+                    INNER JOIN (SELECT DISTINCT market_id FROM price_history) ph ON m.id = ph.market_id
+                    WHERE m.id = ANY($1)
+                    """,
+                    params.market_ids,
+                )
+            else:
+                q_params: list = []
+                wheres = ["active = TRUE"]
+                if params.categories:
+                    q_params.append(params.categories)
+                    wheres.append(
+                        f"(category IS NULL OR category = ANY(${len(q_params)}))"
+                    )
+                if params.min_volume:
+                    q_params.append(params.min_volume)
+                    wheres.append(f"volume >= ${len(q_params)}")
+                market_rows = await conn.fetch(
+                    f"""
+                    SELECT m.id, m.category, m.end_date, m.volume, m.daily_volume
+                    FROM markets m
+                    INNER JOIN (SELECT DISTINCT market_id FROM price_history) ph ON m.id = ph.market_id
+                    WHERE {' AND '.join(wheres)}
+                    """,
+                    *q_params,
+                )
 
         market_meta = {
             r["id"]: {
