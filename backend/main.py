@@ -126,6 +126,8 @@ async def run_backtest_endpoint(
         raise HTTPException(400, "Provide strategy_name or strategy_config")
 
     config["initial_capital"] = req.initial_capital
+    if req.market_ids:
+        config["market_ids"] = req.market_ids
     if req.start_date:
         config["start_date"] = req.start_date.isoformat()
     if req.end_date:

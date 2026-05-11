@@ -93,6 +93,7 @@ class BacktestRequest(BaseModel):
     start_date: datetime | None = None
     end_date: datetime | None = None
     initial_capital: float = Field(default=1000.0, gt=0)
+    market_ids: list[str] = Field(default_factory=list, description="Restrict backtest to these market IDs only")
 
     model_config = {
         "json_schema_extra": {

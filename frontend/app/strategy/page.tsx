@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useRef, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { z } from "zod";
 import { API, fetchWithRetry } from "../lib/api";
@@ -19,6 +19,14 @@ interface Strategy {
   categories: string[];
 }
 
+interface MarketResult {
+  id: string;
+  question: string;
+  category: string | null;
+  volume: number;
+  active: boolean;
+}
+
 function StrategyForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -33,6 +41,15 @@ function StrategyForm() {
   const [warmingUp, setWarmingUp] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Market selection state
+  const [marketQuery, setMarketQuery] = useState("");
+  const [marketResults, setMarketResults] = useState<MarketResult[]>([]);
+  const [selectedMarkets, setSelectedMarkets] = useState<MarketResult[]>([]);
+  const [marketSearching, setMarketSearching] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     fetch(`${API}/strategies`)
       .then((r) => r.json())
@@ -42,6 +59,54 @@ function StrategyForm() {
       })
       .catch(() => setError("Failed to load strategies from backend."));
   }, []);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setShowDropdown(false);
+      }
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  // Debounced market search
+  useEffect(() => {
+    if (searchDebounce.current) clearTimeout(searchDebounce.current);
+    if (marketQuery.trim().length < 2) {
+      setMarketResults([]);
+      setShowDropdown(false);
+      return;
+    }
+    searchDebounce.current = setTimeout(async () => {
+      setMarketSearching(true);
+      try {
+        const resp = await fetch(
+          `${API}/markets?query=${encodeURIComponent(marketQuery.trim())}&limit=20&active_only=false`
+        );
+        const data = await resp.json();
+        setMarketResults(Array.isArray(data.items) ? data.items : []);
+        setShowDropdown(true);
+      } catch {
+        setMarketResults([]);
+      } finally {
+        setMarketSearching(false);
+      }
+    }, 350);
+  }, [marketQuery]);
+
+  function addMarket(m: MarketResult) {
+    if (!selectedMarkets.find((s) => s.id === m.id)) {
+      setSelectedMarkets((prev) => [...prev, m]);
+    }
+    setMarketQuery("");
+    setShowDropdown(false);
+  }
+
+  function removeMarket(id: string) {
+    setSelectedMarkets((prev) => prev.filter((m) => m.id !== id));
+  }
 
   const selectedStrategy = strategies.find((s) => s.file === selected);
 
@@ -63,6 +128,9 @@ function StrategyForm() {
     };
     if (startDate) body.start_date = new Date(startDate).toISOString();
     if (endDate) body.end_date = new Date(endDate).toISOString();
+    if (selectedMarkets.length > 0) {
+      body.market_ids = selectedMarkets.map((m) => m.id);
+    }
 
     try {
       const resp = await fetchWithRetry(
@@ -85,6 +153,11 @@ function StrategyForm() {
       setLoading(false);
     }
   }
+
+  // Filtered dropdown: exclude already selected
+  const filteredResults = marketResults.filter(
+    (m) => !selectedMarkets.find((s) => s.id === m.id)
+  );
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -193,6 +266,104 @@ function StrategyForm() {
           </div>
         </div>
 
+        {/* Market Selection */}
+        <div className="card space-y-3">
+          <div>
+            <h2 className="font-semibold text-slate-200">Market Selection</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Optional — leave empty to run across all markets matching the strategy filters.
+              Select specific markets to narrow the universe for a more precise test.
+            </p>
+          </div>
+
+          {/* Selected chips */}
+          {selectedMarkets.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {selectedMarkets.map((m) => (
+                <span
+                  key={m.id}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-blue-500/15 border border-blue-500/40 text-blue-300 text-xs max-w-xs"
+                >
+                  <span className="truncate" title={m.question}>{m.question}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeMarket(m.id)}
+                    className="ml-0.5 text-blue-400 hover:text-red-400 transition-colors flex-shrink-0"
+                    aria-label="Remove"
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Search input + dropdown */}
+          <div className="relative" ref={dropdownRef}>
+            <div className="relative">
+              <input
+                type="text"
+                value={marketQuery}
+                onChange={(e) => setMarketQuery(e.target.value)}
+                onFocus={() => filteredResults.length > 0 && setShowDropdown(true)}
+                placeholder="Search markets by keyword…"
+                className="input w-full pr-8"
+              />
+              {marketSearching && (
+                <svg
+                  className="animate-spin h-4 w-4 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                >
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                </svg>
+              )}
+            </div>
+
+            {showDropdown && filteredResults.length > 0 && (
+              <div className="absolute z-20 mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg shadow-xl overflow-hidden max-h-64 overflow-y-auto">
+                {filteredResults.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => addMarket(m)}
+                    className="w-full text-left px-3 py-2.5 hover:bg-slate-700 transition-colors border-b border-slate-700/50 last:border-0"
+                  >
+                    <div className="text-sm text-slate-200 leading-snug">{m.question}</div>
+                    <div className="flex gap-2 mt-0.5 text-xs text-slate-500">
+                      {m.category && (
+                        <span className="badge bg-slate-700 text-slate-400 text-[10px]">{m.category}</span>
+                      )}
+                      <span>vol ${m.volume.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                      {!m.active && <span className="text-amber-500">resolved</span>}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {showDropdown && !marketSearching && marketQuery.trim().length >= 2 && filteredResults.length === 0 && (
+              <div className="absolute z-20 mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-3 text-sm text-slate-400">
+                No markets found for &ldquo;{marketQuery}&rdquo;
+              </div>
+            )}
+          </div>
+
+          {selectedMarkets.length > 0 && (
+            <div className="flex items-center justify-between text-xs text-slate-500">
+              <span>{selectedMarkets.length} market{selectedMarkets.length !== 1 ? "s" : ""} selected</span>
+              <button
+                type="button"
+                onClick={() => setSelectedMarkets([])}
+                className="text-slate-500 hover:text-red-400 transition-colors"
+              >
+                Clear all
+              </button>
+            </div>
+          )}
+        </div>
+
         <button type="submit" disabled={loading || !selected} className="btn-primary w-full text-center">
           {loading ? (
             <span className="flex items-center justify-center gap-2">
@@ -202,7 +373,11 @@ function StrategyForm() {
               </svg>
               {warmingUp ? "Backend warming up…" : "Starting backtest…"}
             </span>
-          ) : "Run Backtest"}
+          ) : (
+            selectedMarkets.length > 0
+              ? `Run Backtest on ${selectedMarkets.length} market${selectedMarkets.length !== 1 ? "s" : ""}`
+              : "Run Backtest"
+          )}
         </button>
       </form>
     </div>

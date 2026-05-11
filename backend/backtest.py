@@ -28,6 +28,7 @@ class StrategyParams:
     categories: list[str] = field(default_factory=list)
     max_days_to_resolution: int = 9999
     min_days_to_resolution: int = 0          # floor for resolution_sniper
+    market_ids: list[str] = field(default_factory=list)  # explicit market whitelist
     initial_capital: float = 1000.0
     stake_pct: float = 0.05
 
@@ -47,6 +48,7 @@ class StrategyParams:
             categories=list(filters.get("categories", [])),
             max_days_to_resolution=int(filters.get("max_days_to_resolution", 9999)),
             min_days_to_resolution=int(filters.get("min_days_to_resolution", 0)),
+            market_ids=list(d.get("market_ids", [])),
             initial_capital=float(d.get("initial_capital", 1000.0)),
             stake_pct=float(d.get("stake_pct", 0.05)),
         )
@@ -124,6 +126,12 @@ def run_backtest(
     market_meta: {market_id -> {category, end_date, volume}}
     Returns dict with metrics, equity_curve, trades.
     """
+    # Restrict universe to explicit market whitelist if provided
+    if params.market_ids:
+        allowed = set(params.market_ids)
+        price_data = {k: v for k, v in price_data.items() if k in allowed}
+        market_meta = {k: v for k, v in market_meta.items() if k in allowed}
+
     capital = params.initial_capital
     equity_points: list[tuple[datetime, float]] = []
     trades: list[TradeRecord] = []
