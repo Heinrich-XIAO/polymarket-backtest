@@ -22,13 +22,16 @@ Open-source backtester for prediction-market trading strategies on [Polymarket](
 
 ## Screenshots
 
-### Strategy selector & results
+### Dashboard — 10,800+ markets, 18 strategies, live API status
+![Dashboard](https://distank.github.io/polymarket-backtest/screenshot-dashboard.png)
+
+### Strategy selector
 ![Strategy selector](https://distank.github.io/polymarket-backtest/screenshot-strategy.png)
 
-### Equity curve & trade log
+### Backtest results — equity curve, metrics, trade log
 ![Equity curve](https://distank.github.io/polymarket-backtest/screenshot-results.png)
 
-### Parameter sweep leaderboard
+### Parameter sweep — grid search leaderboard
 ![Sweep leaderboard](https://distank.github.io/polymarket-backtest/screenshot-sweep.png)
 
 ---
