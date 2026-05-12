@@ -5,6 +5,31 @@ Open-source backtester for prediction-market trading strategies on [Polymarket](
 **Built for the Polymarket Builders Program.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-GitHub%20Pages-brightgreen)](https://distank.github.io/polymarket-backtest/)
+
+---
+
+## Live Demo
+
+**[https://distank.github.io/polymarket-backtest/](https://distank.github.io/polymarket-backtest/)**
+
+- Browse 10,800+ real Polymarket markets
+- Run 180-day backtests in < 5 seconds
+- Compare 18 pre-built strategies
+- Export results to CSV
+
+---
+
+## Screenshots
+
+### Strategy selector & results
+![Strategy selector](https://distank.github.io/polymarket-backtest/screenshot-strategy.png)
+
+### Equity curve & trade log
+![Equity curve](https://distank.github.io/polymarket-backtest/screenshot-results.png)
+
+### Parameter sweep leaderboard
+![Sweep leaderboard](https://distank.github.io/polymarket-backtest/screenshot-sweep.png)
 
 ---
 
@@ -25,7 +50,7 @@ Open-source backtester for prediction-market trading strategies on [Polymarket](
 
 ```bash
 # 1. Clone
-git clone https://github.com/yourname/polymarket-backtest
+git clone https://github.com/distank/polymarket-backtest
 cd polymarket-backtest
 
 # 2. Configure

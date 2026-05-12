@@ -39,7 +39,6 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
-      - ./strategies:/app/strategies
     restart: unless-stopped
 
   celery:
@@ -53,7 +52,6 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
-      - ./strategies:/app/strategies
     restart: unless-stopped
 
   frontend:
