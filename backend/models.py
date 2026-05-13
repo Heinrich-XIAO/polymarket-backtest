@@ -85,6 +85,7 @@ class StrategyConfig(BaseModel):
     initial_capital: float = 1000.0
     stake_pct: float = 0.05
     description: str = ""
+    position_side: str = "yes"
 
 
 class BacktestRequest(BaseModel):

@@ -46,6 +46,25 @@ _CATEGORY_KEYWORDS: list[tuple[str, list[str]]] = [
         "season", "episode", "tv show", "celebrity", "singer", "actor", "album",
         "music", "award", "billie", "taylor swift",
     ]),
+    ("science_tech", [
+        "ai ", "artificial intelligence", "chatgpt", "gpt-", "openai", "anthropic", "gemini",
+        "llm", "machine learning", "spacex", "nasa", "starship", "rocket", "satellite",
+        "apple", "google", "microsoft", "meta ", "amazon", "tesla", "nvidia",
+        "iphone", "android", "chip", "semiconductor", "quantum", "fusion",
+        "tech company", "startup", "ipo tech", "silicon valley",
+    ]),
+    ("geopolitics", [
+        "war", "conflict", "invasion", "ceasefire", "nato", "un security",
+        "russia", "ukraine", "china", "taiwan", "north korea", "iran", "israel",
+        "sanctions", "military", "troops", "missile", "nuclear", "ally", "treaty",
+        "coup", "regime", "diplomatic", "geopolit",
+    ]),
+    ("health", [
+        "fda ", "fda approval", "drug approval", "clinical trial", "vaccine",
+        "pandemic", "covid", "mpox", "outbreak", "disease", "cancer", "alzheimer",
+        "pfizer", "moderna", "johnson", "pharmaceutical", "biotech", "who ",
+        "health emergency", "mortality", "life expectancy", "obesity",
+    ]),
 ]
 
 
@@ -111,8 +130,10 @@ class GammaSyncer:
                 try:
                     clob_ids = json.loads(clob_ids_raw) if isinstance(clob_ids_raw, str) else clob_ids_raw
                     token_id = clob_ids[0] if clob_ids else None
+                    no_token_id = clob_ids[1] if len(clob_ids) > 1 else None
                 except Exception:
                     token_id = None
+                    no_token_id = None
 
                 # Extract current YES price from outcomePrices
                 outcome_prices_raw = m.get("outcomePrices", "[]")
@@ -134,14 +155,15 @@ class GammaSyncer:
                     token_id,
                     float(m.get("volume24hr") or 0),
                     current_price,
+                    no_token_id,
                 ))
 
             if rows:
                 async with self.pool.acquire() as conn:
                     await conn.executemany(
                         """
-                        INSERT INTO markets (id, question, category, end_date, volume, active, synced_at, token_id, daily_volume, current_price)
-                        VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9)
+                        INSERT INTO markets (id, question, category, end_date, volume, active, synced_at, token_id, daily_volume, current_price, no_token_id)
+                        VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9, $10)
                         ON CONFLICT (id) DO UPDATE SET
                             question      = EXCLUDED.question,
                             category      = EXCLUDED.category,
@@ -151,7 +173,8 @@ class GammaSyncer:
                             synced_at     = NOW(),
                             token_id      = COALESCE(EXCLUDED.token_id, markets.token_id),
                             daily_volume  = EXCLUDED.daily_volume,
-                            current_price = EXCLUDED.current_price
+                            current_price = EXCLUDED.current_price,
+                            no_token_id   = COALESCE(EXCLUDED.no_token_id, markets.no_token_id)
                         """,
                         rows,
                     )
@@ -257,8 +280,10 @@ class GammaSyncer:
                     try:
                         clob_ids = json.loads(clob_ids_raw) if isinstance(clob_ids_raw, str) else clob_ids_raw
                         token_id = clob_ids[0] if clob_ids else None
+                        no_token_id = clob_ids[1] if len(clob_ids) > 1 else None
                     except Exception:
                         token_id = None
+                        no_token_id = None
                     outcome_prices_raw = m.get("outcomePrices", "[]")
                     try:
                         outcome_prices = json.loads(outcome_prices_raw) if isinstance(outcome_prices_raw, str) else outcome_prices_raw
@@ -276,6 +301,7 @@ class GammaSyncer:
                         token_id,
                         float(m.get("volume24hr") or 0),
                         current_price,
+                        no_token_id,
                     ))
                     if token_id:
                         fetched_ids.append((str(market_id), token_id))
@@ -354,8 +380,10 @@ class GammaSyncer:
                 try:
                     clob_ids = json.loads(clob_ids_raw) if isinstance(clob_ids_raw, str) else clob_ids_raw
                     token_id = clob_ids[0] if clob_ids else None
+                    no_token_id = clob_ids[1] if len(clob_ids) > 1 else None
                 except Exception:
                     token_id = None
+                    no_token_id = None
                 outcome_prices_raw = m.get("outcomePrices", "[]")
                 try:
                     outcome_prices = json.loads(outcome_prices_raw) if isinstance(outcome_prices_raw, str) else outcome_prices_raw
@@ -386,6 +414,7 @@ class GammaSyncer:
                     token_id,
                     float(m.get("volume24hr") or 0),
                     resolved_price or current_price,
+                    no_token_id,
                 ))
                 if token_id:
                     fetched_ids.append((str(market_id), token_id))
@@ -394,8 +423,8 @@ class GammaSyncer:
                 async with self.pool.acquire() as conn:
                     await conn.executemany(
                         """
-                        INSERT INTO markets (id, question, category, end_date, volume, active, synced_at, token_id, daily_volume, current_price)
-                        VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9)
+                        INSERT INTO markets (id, question, category, end_date, volume, active, synced_at, token_id, daily_volume, current_price, no_token_id)
+                        VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9, $10)
                         ON CONFLICT (id) DO UPDATE SET
                             question      = EXCLUDED.question,
                             category      = EXCLUDED.category,
@@ -405,7 +434,8 @@ class GammaSyncer:
                             synced_at     = NOW(),
                             token_id      = COALESCE(EXCLUDED.token_id, markets.token_id),
                             daily_volume  = EXCLUDED.daily_volume,
-                            current_price = EXCLUDED.current_price
+                            current_price = EXCLUDED.current_price,
+                            no_token_id   = COALESCE(EXCLUDED.no_token_id, markets.no_token_id)
                         """,
                         rows,
                     )
@@ -620,8 +650,9 @@ class GammaSyncer:
                     except Exception:
                         pass
 
-                    # Use token1 as token_id for CLOB price history lookup
+                    # Use token1/token2 as YES/NO token IDs for CLOB price history lookup
                     token_id = r.get("token1") or None
+                    no_token_id = r.get("token2") or None
 
                     vol = float(r.get("volume") or r.get("volumeNum") or 0)
                     if vol < 100:  # skip zero-volume auto-generated markets
@@ -636,14 +667,15 @@ class GammaSyncer:
                         token_id,
                         0.0,
                         yes_price,
+                        no_token_id,
                     ))
 
                 if rows:
                     async with self.pool.acquire() as conn:
                         await conn.executemany(
                             """
-                            INSERT INTO markets (id, question, category, end_date, volume, active, synced_at, token_id, daily_volume, current_price)
-                            VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9)
+                            INSERT INTO markets (id, question, category, end_date, volume, active, synced_at, token_id, daily_volume, current_price, no_token_id)
+                            VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9, $10)
                             ON CONFLICT (id) DO UPDATE SET
                                 question      = EXCLUDED.question,
                                 category      = COALESCE(EXCLUDED.category, markets.category),
@@ -651,7 +683,8 @@ class GammaSyncer:
                                 active        = EXCLUDED.active,
                                 synced_at     = NOW(),
                                 token_id      = COALESCE(markets.token_id, EXCLUDED.token_id),
-                                current_price = COALESCE(markets.current_price, EXCLUDED.current_price)
+                                current_price = COALESCE(markets.current_price, EXCLUDED.current_price),
+                                no_token_id   = COALESCE(markets.no_token_id, EXCLUDED.no_token_id)
                             """,
                             rows,
                         )

@@ -31,6 +31,7 @@ class StrategyParams:
     market_ids: list[str] = field(default_factory=list)  # explicit market whitelist
     initial_capital: float = 1000.0
     stake_pct: float = 0.05
+    position_side: str = "yes"  # "yes" or "no" — trade YES or NO token
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "StrategyParams":
@@ -51,6 +52,7 @@ class StrategyParams:
             market_ids=list(d.get("market_ids", [])),
             initial_capital=float(d.get("initial_capital", 1000.0)),
             stake_pct=float(d.get("stake_pct", 0.05)),
+            position_side=str(d.get("position_side", "yes")),
         )
 
 
@@ -194,7 +196,9 @@ def run_backtest(
                 pos = open_positions[market_id]
                 current_price = float(records[cur_idx][1])
                 volume = float(records[cur_idx][2])
-                exit_exec = simulate_fill(current_price, "SELL", volume)
+                is_no = pos.get("is_no", False)
+                exit_trade_price = (1.0 - current_price) if is_no else current_price
+                exit_exec = simulate_fill(exit_trade_price, "SELL", volume)
                 pnl_pct = (exit_exec - pos["entry_exec_price"]) / pos["entry_exec_price"]
 
                 exit_reason = ""
@@ -214,8 +218,8 @@ def run_backtest(
                         entry_date=pos["entry_date"],
                         exit_date=datetime.combine(current_date, datetime.min.time()),
                         entry_price=pos["entry_price"],
-                        exit_price=current_price,
-                        position="yes",
+                        exit_price=exit_trade_price,
+                        position="no" if is_no else "yes",
                         stake=round(stake, 4),
                         pnl=round(pnl, 4),
                         pnl_pct=round(pnl_pct * 100, 2),
@@ -262,6 +266,9 @@ def run_backtest(
                         "price_drop_pct": price_drop_pct,
                         "price": current_price,
                         "volume": daily_vol,
+                        "no_price": 1.0 - current_price,
+                        "price_rise_pct": -price_drop_pct,
+                        "no_price_drop_pct": -price_drop_pct,
                     },
                 ))
             except Exception as exc:
@@ -275,13 +282,16 @@ def run_backtest(
             if stake < 1.0 or stake > capital:
                 continue
 
-            entry_exec = simulate_fill(current_price, "BUY", daily_vol)
+            is_no = params.position_side == "no"
+            entry_trade_price = (1.0 - current_price) if is_no else current_price
+            entry_exec = simulate_fill(entry_trade_price, "BUY", daily_vol)
             capital -= stake
             open_positions[market_id] = {
                 "entry_date": datetime.combine(current_date, datetime.min.time()),
-                "entry_price": current_price,
+                "entry_price": entry_trade_price,
                 "entry_exec_price": entry_exec,
                 "stake": stake,
+                "is_no": is_no,
             }
 
         current_equity = capital + sum(p["stake"] for p in open_positions.values())
@@ -296,9 +306,11 @@ def run_backtest(
         if idx_data is None:
             continue
         records, _ = idx_data
-        last_price = float(records[-1][1])
+        last_yes_price = float(records[-1][1])
         last_vol = float(records[-1][2])
-        exit_exec = simulate_fill(last_price, "SELL", last_vol)
+        is_no = pos.get("is_no", False)
+        last_trade_price = (1.0 - last_yes_price) if is_no else last_yes_price
+        exit_exec = simulate_fill(last_trade_price, "SELL", last_vol)
         pnl_pct = (exit_exec - pos["entry_exec_price"]) / pos["entry_exec_price"]
         pnl = pos["stake"] * pnl_pct
         capital += pos["stake"] + pnl
@@ -308,8 +320,8 @@ def run_backtest(
             entry_date=pos["entry_date"],
             exit_date=last_dt,
             entry_price=pos["entry_price"],
-            exit_price=last_price,
-            position="yes",
+            exit_price=last_trade_price,
+            position="no" if is_no else "yes",
             stake=round(pos["stake"], 4),
             pnl=round(pnl, 4),
             pnl_pct=round(pnl_pct * 100, 2),

@@ -369,7 +369,7 @@ async def trigger_near_resolution_sync(
 @app.post("/admin/sync-resolved", status_code=202, tags=["admin"])
 async def trigger_resolved_sync(
     background_tasks: BackgroundTasks,
-    limit: int = Query(500, ge=1, le=2000),
+    limit: int = Query(2000, ge=1, le=10000),
 ) -> dict[str, str]:
     """Sync resolved (closed) markets + their price histories. Gold for backtesting real outcomes."""
     async def _do_sync() -> None:
@@ -432,7 +432,7 @@ async def trigger_data_api_sync(
 @app.post("/admin/sync-hf-markets", status_code=202, tags=["admin"])
 async def trigger_hf_markets_sync(
     background_tasks: BackgroundTasks,
-    limit: int = Query(5000, ge=100, le=50000),
+    limit: int = Query(10000, ge=100, le=50000),
 ) -> dict[str, str]:
     """Bulk import up to 538k market metadata from HuggingFace SII-WANGZJ/Polymarket_data."""
     async def _do_sync() -> None:
@@ -509,36 +509,46 @@ async def trigger_diverse_sync(
                         except Exception:
                             token_id = None
 
-                        from sync_gamma import _parse_dt
+                        from sync_gamma import _parse_dt, _assign_category
                         end_date = _parse_dt(m.get("endDate") or m.get("end_date_iso"))
 
+                        try:
+                            no_clob_ids = _json.loads(m.get("clobTokenIds", "[]") or "[]")
+                            no_token_id = no_clob_ids[1] if len(no_clob_ids) > 1 else None
+                        except Exception:
+                            no_token_id = None
+
+                        q_text = m.get("question", "")
                         rows.append((
                             str(market_id),
-                            m.get("question", ""),
-                            m.get("category") or None,
+                            q_text,
+                            m.get("category") or _assign_category(q_text),
                             end_date,
                             float(m.get("volume") or m.get("volumeNum") or 0),
                             True,
                             token_id,
                             float(m.get("volume24hr") or 0),
                             yes_price,
+                            no_token_id,
                         ))
 
                     if rows:
                         async with pool.acquire() as conn:
                             await conn.executemany(
                                 """
-                                INSERT INTO markets (id, question, category, end_date, volume, active, synced_at, token_id, daily_volume, current_price)
-                                VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9)
+                                INSERT INTO markets (id, question, category, end_date, volume, active, synced_at, token_id, daily_volume, current_price, no_token_id)
+                                VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9, $10)
                                 ON CONFLICT (id) DO UPDATE SET
                                     question      = EXCLUDED.question,
+                                    category      = COALESCE(EXCLUDED.category, markets.category),
                                     end_date      = EXCLUDED.end_date,
                                     volume        = EXCLUDED.volume,
                                     active        = EXCLUDED.active,
                                     synced_at     = NOW(),
                                     token_id      = COALESCE(EXCLUDED.token_id, markets.token_id),
                                     daily_volume  = EXCLUDED.daily_volume,
-                                    current_price = EXCLUDED.current_price
+                                    current_price = EXCLUDED.current_price,
+                                    no_token_id   = COALESCE(EXCLUDED.no_token_id, markets.no_token_id)
                                 """,
                                 rows,
                             )

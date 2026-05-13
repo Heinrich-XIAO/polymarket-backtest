@@ -1,0 +1,13 @@
+name: no_fade
+description: Buy NO tokens when market overconfidence is extreme (YES > 0.82) — fade consensus or profit from NO resolution
+entry:
+  condition: no_price < 0.18 and no_price > 0.03
+  lookback_days: 3
+exit:
+  take_profit: 0.50
+  stop_loss: 0.60
+filters:
+  min_volume: 2000
+  max_days_to_resolution: 90
+position_side: "no"
+stake_pct: 0.04

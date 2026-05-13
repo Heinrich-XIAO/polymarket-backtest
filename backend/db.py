@@ -86,6 +86,8 @@ CREATE TABLE IF NOT EXISTS backtest_sweeps (
 
 ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS sweep_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_runs_sweep_id ON backtest_runs (sweep_id);
+
+ALTER TABLE markets ADD COLUMN IF NOT EXISTS no_token_id TEXT;
 """
 
 
