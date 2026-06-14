@@ -1,0 +1,17 @@
+name: R4 Vol-Zscore Product
+description: Product of volatility and volume zscore — explosive combination.
+
+entry:
+  condition: price_volatility * volume_zscore > 0.06
+  lookback_days: 7
+
+exit:
+  take_profit: 0.85
+  stop_loss: 0.80
+
+filters:
+  min_volume: 5000
+  categories: [politics, crypto, economics, sports]
+  max_days_to_resolution: 9999
+
+stake_pct: 0.04

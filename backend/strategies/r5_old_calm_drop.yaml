@@ -1,0 +1,17 @@
+name: R5 Old Calm Drop
+description: Old, calm market with a sudden drop — mature market overreaction.
+
+entry:
+  condition: market_age_days > 60 and price_volatility < 0.02 and price_drop_pct > 0.08
+  lookback_days: 10
+
+exit:
+  take_profit: 0.85
+  stop_loss: 0.80
+
+filters:
+  min_volume: 3000
+  categories: [politics, crypto, economics, sports]
+  max_days_to_resolution: 9999
+
+stake_pct: 0.05

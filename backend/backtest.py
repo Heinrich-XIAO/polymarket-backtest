@@ -317,6 +317,10 @@ def run_backtest(
                     params.entry_condition,
                     {"__builtins__": {}},
                     {
+                        # arithmetic helpers
+                        "abs": abs, "min": min, "max": max, "round": round,
+                        "sum": sum, "len": len, "pow": pow,
+                        # variables
                         "price_drop_pct": price_drop_pct,
                         "price": current_price,
                         "volume": daily_vol,

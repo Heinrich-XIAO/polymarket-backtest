@@ -1,0 +1,17 @@
+name: R2 Vol-Adjusted Drop
+description: Drop minus normal daily volatility — only real moves, not noise.
+
+entry:
+  condition: max(price_drop_pct - price_volatility, 0) > 0.05
+  lookback_days: 7
+
+exit:
+  take_profit: 0.85
+  stop_loss: 0.80
+
+filters:
+  min_volume: 5000
+  categories: [politics, crypto, economics, sports]
+  max_days_to_resolution: 9999
+
+stake_pct: 0.05

@@ -1,0 +1,17 @@
+name: R1 Volume-Weighted Drop
+description: Drop size scaled by volume anomaly — unusual volume adds conviction.
+
+entry:
+  condition: price_drop_pct * volume_zscore > 0.15
+  lookback_days: 5
+
+exit:
+  take_profit: 0.85
+  stop_loss: 0.80
+
+filters:
+  min_volume: 5000
+  categories: [politics, crypto, economics, sports]
+  max_days_to_resolution: 9999
+
+stake_pct: 0.04
