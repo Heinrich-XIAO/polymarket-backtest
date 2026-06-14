@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -157,6 +157,28 @@ def run_backtest(
     # Pre-index price data for fast date lookups
     indexed = _index_price_data(price_data)
 
+    # First record date for each market (market age)
+    market_first_date = {
+        mid: recs[0][0]
+        for mid, (recs, _) in indexed.items()
+        if recs
+    }
+
+    # Daily category concentration (# of markets in same category on each date)
+    date_category_count: dict[date, dict[str, int]] = {}
+    for d in sorted_dates:
+        counts: dict[str, int] = {}
+        for mid, meta in market_meta.items():
+            cat = meta.get("category")
+            if not cat:
+                continue
+            idx_data = indexed.get(mid)
+            if idx_data is None:
+                continue
+            if idx_data[1].get(d) is not None:
+                counts[cat] = counts.get(cat, 0) + 1
+        date_category_count[d] = counts
+
     open_positions: dict[str, dict[str, Any]] = {}
 
     for current_date in sorted_dates:
@@ -258,6 +280,38 @@ def run_backtest(
 
             price_drop_pct = (past_price - current_price) / max(past_price, 0.001)
 
+            prices_w = np.array([r[1] for r in window])
+            vols_w = np.array([r[2] for r in window])
+            sma = float(np.mean(prices_w))
+
+            price_returns = (prices_w[1:] / prices_w[:-1]) - 1
+            price_volatility = float(np.nan_to_num(np.std(price_returns)))
+
+            price_momentum = (current_price - sma) / max(sma, 0.001)
+            price_range = (float(np.max(prices_w)) - float(np.min(prices_w))) / max(sma, 0.001)
+
+            current_rec_vol = float(window[-1][2])
+            mean_vol = float(np.mean(vols_w))
+            std_vol = float(np.std(vols_w))
+            volume_zscore = (current_rec_vol - mean_vol) / max(std_vol, 0.001) if std_vol > 0 else 0.0
+
+            first_date = market_first_date.get(market_id)
+            market_age_days = (current_date - first_date).days if first_date else 0
+
+            half = len(prices_w) // 2
+            if half >= 2:
+                fhs = float(prices_w[0])
+                fhe = float(prices_w[half - 1])
+                shs = float(prices_w[half])
+                she = float(prices_w[-1])
+                pda = (fhs - fhe) / max(fhs, 0.001)
+                pdb = (shs - she) / max(shs, 0.001)
+                price_acceleration = pdb - pda
+            else:
+                price_acceleration = 0.0
+
+            concentration = date_category_count.get(current_date, {}).get(meta.get("category", ""), 0)
+
             try:
                 signal = bool(eval(  # noqa: S307 — sandboxed strategy DSL
                     params.entry_condition,
@@ -269,6 +323,14 @@ def run_backtest(
                         "no_price": 1.0 - current_price,
                         "price_rise_pct": -price_drop_pct,
                         "no_price_drop_pct": -price_drop_pct,
+                        "price_volatility": price_volatility,
+                        "price_momentum": price_momentum,
+                        "price_range": price_range,
+                        "volume_zscore": volume_zscore,
+                        "market_age_days": market_age_days,
+                        "price_acceleration": price_acceleration,
+                        "category": meta.get("category", ""),
+                        "concentration": concentration,
                     },
                 ))
             except Exception as exc:
