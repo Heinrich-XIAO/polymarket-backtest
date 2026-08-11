@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "export",
-  basePath: "/polymarket-backtest",
+  basePath: process.env.NEXT_PUBLIC_BASE_PATH || "",
   trailingSlash: true,
   images: { unoptimized: true },
   env: {

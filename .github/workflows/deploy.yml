@@ -32,6 +32,7 @@ jobs:
         working-directory: frontend
         env:
           NEXT_PUBLIC_API_URL: https://polymarket-backtest-ir3p.onrender.com
+          NEXT_PUBLIC_BASE_PATH: /polymarket-backtest
         run: npm run build
 
       - name: Upload artifact
