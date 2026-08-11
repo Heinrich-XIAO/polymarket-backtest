@@ -14,9 +14,9 @@ run:
 frontend:
 	cd frontend && bun dev
 
-# Pull live data from Polymarket Gamma API (200 markets, runs in background)
+# Pull live data from Polymarket Gamma API (1200 markets, runs in background)
 sync:
-	curl -s -X POST "http://localhost:8000/admin/sync?max_markets=200" | python3 -m json.tool
+	curl -s -X POST "http://localhost:8000/admin/sync?max_markets=1200" | python3 -m json.tool
 
 # Seed database with synthetic data for demo/testing (no internet needed)
 seed:

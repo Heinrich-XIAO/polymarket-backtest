@@ -97,7 +97,7 @@ class GammaSyncer:
         await self.gamma.aclose()
         await self.clob.aclose()
 
-    async def sync_markets(self, limit: int = 500) -> int:
+    async def sync_markets(self, limit: int = 1500) -> int:
         """Upsert active markets from Gamma API. Returns count synced."""
         synced = 0
         offset = 0
@@ -462,7 +462,7 @@ class GammaSyncer:
         logger.info("Resolved histories: %d price points", total_pts)
         return synced
 
-    async def sync_all_histories(self, max_markets: int = 200, prefer_competitive: bool = False, fidelity: int = 1440) -> int:
+    async def sync_all_histories(self, max_markets: int = 1200, prefer_competitive: bool = False, fidelity: int = 1440) -> int:
         """Sync price history for active markets that have a token_id."""
         async with self.pool.acquire() as conn:
             if prefer_competitive:
@@ -720,8 +720,8 @@ async def run_full_sync() -> None:
     await init_db()
     syncer = GammaSyncer(pool)
     try:
-        await syncer.sync_markets(500)
-        await syncer.sync_all_histories(200)
+        await syncer.sync_markets(1500)
+        await syncer.sync_all_histories(1200)
     finally:
         await syncer.close()
 

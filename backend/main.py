@@ -358,7 +358,7 @@ async def reset_stuck_runs() -> dict[str, Any]:
 @app.post("/admin/sync", status_code=202, tags=["admin"])
 async def trigger_sync(
     background_tasks: BackgroundTasks,
-    max_markets: int = Query(200, ge=1, le=1000),
+    max_markets: int = Query(1200, ge=1, le=3000),
 ) -> dict[str, str]:
     """Trigger a data sync from Gamma API in the background."""
     async def _do_sync() -> None:
@@ -366,7 +366,7 @@ async def trigger_sync(
         pool = await get_pool()
         syncer = GammaSyncer(pool)
         try:
-            await syncer.sync_markets(500)
+            await syncer.sync_markets(1500)
             await syncer.sync_all_histories(max_markets)
         except Exception as exc:
             logger.error("Background sync failed: %s", exc)
