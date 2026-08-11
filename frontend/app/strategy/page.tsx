@@ -239,7 +239,7 @@ function StrategyForm() {
               value={capital}
               onChange={(e) => setCapital(e.target.value)}
               min="1"
-              step="100"
+              step="1"
               className="input w-full"
               placeholder="1000"
             />
