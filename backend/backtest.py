@@ -222,6 +222,7 @@ def run_backtest(
                 exit_trade_price = (1.0 - current_price) if is_no else current_price
                 exit_exec = simulate_fill(exit_trade_price, "SELL", volume)
                 pnl_pct = (exit_exec - pos["entry_exec_price"]) / pos["entry_exec_price"]
+                pos["current_value"] = pos["stake"] * (1.0 + pnl_pct)
 
                 exit_reason = ""
                 if pnl_pct >= params.take_profit:
@@ -360,13 +361,16 @@ def run_backtest(
                 "is_no": is_no,
             }
 
-        current_equity = capital + sum(p["stake"] for p in open_positions.values())
+        current_equity = capital + sum(
+            p.get("current_value", p["stake"]) for p in open_positions.values()
+        )
         equity_points.append((
             datetime.combine(current_date, datetime.min.time()),
             round(current_equity, 4),
         ))
 
     # Force-close remaining positions at last known price
+    forced_closed = False
     for market_id, pos in list(open_positions.items()):
         idx_data = indexed.get(market_id)
         if idx_data is None:
@@ -380,6 +384,7 @@ def run_backtest(
         pnl_pct = (exit_exec - pos["entry_exec_price"]) / pos["entry_exec_price"]
         pnl = pos["stake"] * pnl_pct
         capital += pos["stake"] + pnl
+        forced_closed = True
         last_dt = equity_points[-1][0] if equity_points else datetime.utcnow()
         trades.append(TradeRecord(
             market_id=market_id,
@@ -394,6 +399,10 @@ def run_backtest(
             hold_days=(last_dt.date() - pos["entry_date"].date()).days,
             exit_reason="end_of_period",
         ))
+
+    # Reflect realized PnL from force-closed positions in the curve's final value
+    if forced_closed and equity_points:
+        equity_points.append((equity_points[-1][0], round(capital, 4)))
 
     return {
         "metrics": compute_metrics(trades, equity_points, params.initial_capital),

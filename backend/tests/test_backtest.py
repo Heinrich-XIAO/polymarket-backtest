@@ -186,5 +186,38 @@ def test_roi_consistent_with_pnl():
     assert abs(m["roi_pct"] - expected) < 0.01
 
 
+def test_equity_curve_reflects_forced_close_pnl():
+    # Entry triggers on the 10% drop to 0.54, but price never hits take_profit
+    # (+12%) or stop_loss (-7%) before the window ends, so the trade exits only
+    # via end_of_period force-close. The curve must end at initial_capital + pnl
+    # instead of staying flat at $1000 while the stats report a profit.
+    prices = [0.60, 0.57, 0.54, 0.59, 0.60, 0.61, 0.62, 0.63]
+    df = _price_df(prices)
+    result = run_backtest(
+        {"m10": df}, {"m10": _meta()}, _params(initial_capital=1000.0),
+        START, START + timedelta(days=len(prices)),
+    )
+    m = result["metrics"]
+    curve = result["equity_curve"]
+    assert m["total_trades"] == 1
+    assert all(t["exit_reason"] == "end_of_period" for t in result["trades"])
+    assert abs(curve[-1]["equity"] - (1000.0 + m["total_pnl"])) < 0.02
+    assert curve[-1]["equity"] > 1000.0
+
+
+def test_equity_curve_marks_open_positions_to_market():
+    # After entry, unrealized PnL must move the curve even before the trade closes.
+    prices = [0.60, 0.57, 0.54, 0.63, 0.65, 0.63]
+    df = _price_df(prices)
+    result = run_backtest(
+        {"m11": df}, {"m11": _meta()}, _params(initial_capital=1000.0),
+        START, START + timedelta(days=len(prices)),
+    )
+    curve = result["equity_curve"]
+    equity_after_entry = curve[3]["equity"]
+    equity_next_day = curve[4]["equity"]
+    assert equity_next_day > equity_after_entry
+
+
 # import needed for fill price clamp test
 from backtest import MAX_PRICE, MIN_PRICE
