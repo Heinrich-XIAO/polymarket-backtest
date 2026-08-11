@@ -12,6 +12,11 @@ from backtest import StrategyParams, run_backtest
 
 logger = logging.getLogger(__name__)
 
+# Genuine concurrency cap: at most this many backtests run at once.
+# New runs queue on the semaphore (status stays 'pending') instead of erroring.
+_EXEC_LIMIT = 2
+_exec_semaphore = asyncio.Semaphore(_EXEC_LIMIT)
+
 
 def _parse_dt(value: str | None) -> datetime | None:
     if not value:
@@ -120,52 +125,53 @@ async def _load_market_meta(pool, params: StrategyParams) -> dict:
 async def _execute(run_id: str, config: dict) -> None:
     pool = await get_pool()
     try:
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE backtest_runs SET status='running', progress_pct=10 WHERE run_id=$1",
-                run_id,
+        async with _exec_semaphore:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE backtest_runs SET status='running', progress_pct=10 WHERE run_id=$1",
+                    run_id,
+                )
+
+            params = StrategyParams.from_dict(config)
+            start_date = datetime.fromisoformat(config["start_date"]) if config.get("start_date") else None
+            end_date = datetime.fromisoformat(config["end_date"]) if config.get("end_date") else None
+
+            market_meta = await _load_market_meta(pool, params)
+
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE backtest_runs SET progress_pct=30 WHERE run_id=$1", run_id
+                )
+
+            price_data = await _load_price_data(
+                pool, list(market_meta.keys()), start_date, end_date
             )
 
-        params = StrategyParams.from_dict(config)
-        start_date = datetime.fromisoformat(config["start_date"]) if config.get("start_date") else None
-        end_date = datetime.fromisoformat(config["end_date"]) if config.get("end_date") else None
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE backtest_runs SET progress_pct=60 WHERE run_id=$1", run_id
+                )
 
-        market_meta = await _load_market_meta(pool, params)
+            result = run_backtest(price_data, market_meta, params, start_date, end_date)
 
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE backtest_runs SET progress_pct=30 WHERE run_id=$1", run_id
-            )
-
-        price_data = await _load_price_data(
-            pool, list(market_meta.keys()), start_date, end_date
-        )
-
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE backtest_runs SET progress_pct=60 WHERE run_id=$1", run_id
-            )
-
-        result = run_backtest(price_data, market_meta, params, start_date, end_date)
-
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """
-                UPDATE backtest_runs SET
-                    status       = 'done',
-                    progress_pct = 100,
-                    metrics      = $2,
-                    equity_curve = $3,
-                    trades       = $4,
-                    completed_at = NOW()
-                WHERE run_id = $1
-                """,
-                run_id,
-                json.dumps(result["metrics"]),
-                json.dumps(result["equity_curve"]),
-                json.dumps(result["trades"]),
-            )
-        logger.info("Backtest %s completed: %d trades", run_id, result["metrics"]["total_trades"])
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE backtest_runs SET
+                        status       = 'done',
+                        progress_pct = 100,
+                        metrics      = $2,
+                        equity_curve = $3,
+                        trades       = $4,
+                        completed_at = NOW()
+                    WHERE run_id = $1
+                    """,
+                    run_id,
+                    json.dumps(result["metrics"]),
+                    json.dumps(result["equity_curve"]),
+                    json.dumps(result["trades"]),
+                )
+            logger.info("Backtest %s completed: %d trades", run_id, result["metrics"]["total_trades"])
 
     except Exception as exc:
         logger.error("Backtest %s failed: %s", run_id, exc, exc_info=True)

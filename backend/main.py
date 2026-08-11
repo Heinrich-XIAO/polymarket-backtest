@@ -47,6 +47,21 @@ async def root() -> RedirectResponse:
 @app.on_event("startup")
 async def startup() -> None:
     await init_db()
+    # Mark runs orphaned by a previous process (in-process tasks die on restart).
+    # Otherwise they'd count against the concurrency gate forever.
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE backtest_runs SET status='failed', error='Server restarted', completed_at=NOW() "
+            "WHERE status IN ('pending', 'running')"
+        )
+        reset = int(result.rowcount)
+        await conn.execute(
+            "UPDATE backtest_sweeps SET status='failed', completed_at=NOW() "
+            "WHERE status='running'"
+        )
+    if reset:
+        logger.warning("Reset %d orphaned backtest runs from previous process", reset)
     logger.info("DB initialized")
 
 
@@ -126,11 +141,13 @@ async def run_backtest_endpoint(
         raise HTTPException(400, "Provide strategy_name(s) or strategy_config")
 
     pool = await get_pool()
-    # Limit to 2 concurrent backtests to prevent OOM on free tier
+    # Limit to 2 concurrent backtests to prevent OOM on free tier.
+    # Queued ('pending') runs don't block new requests — they wait on the
+    # execution semaphore in tasks.py, so bulk runs drain without 429s.
     async with pool.acquire() as conn:
         active = int(
             await conn.fetchval(
-                "SELECT COUNT(*) FROM backtest_runs WHERE status IN ('pending','running')"
+                "SELECT COUNT(*) FROM backtest_runs WHERE status='running'"
             ) or 0
         )
         if active >= 2:
