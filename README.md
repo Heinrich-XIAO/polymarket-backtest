@@ -44,12 +44,14 @@ Open-source backtester for prediction-market trading strategies on [Polymarket](
 - **Live data** from Polymarket Gamma API
 - **Full metrics** — PnL, ROI, Max Drawdown, Win Rate, Sharpe Ratio
 - **Interactive UI** — equity curve chart, trade log, CSV export
-- **Async API** — FastAPI + Celery for non-blocking execution
-- **One-command setup** — Docker Compose
+- **Async API** — FastAPI in-process background tasks (no Celery/Redis required)
+- **One-command setup** — `uv sync` + SQLite, zero infrastructure
 
 ---
 
 ## Quick Start
+
+No Docker required — the backend runs directly with [uv](https://docs.astral.sh/uv/) on a local SQLite database.
 
 ```bash
 # 1. Clone
@@ -59,14 +61,27 @@ cd polymarket-backtest
 # 2. Configure
 cp .env.example .env
 
-# 3. Start
-docker compose up --build
+# 3. Install backend deps (creates .venv)
+cd backend && uv sync
 
-# 4. Sync market data (run once)
-curl -X POST http://localhost:8000/admin/sync
+# 4. Run the API
+uv run uvicorn main:app --reload
 
-# 5. Open UI
-open http://localhost:3000
+# 5. Seed demo data (or POST /admin/sync for live data)
+uv run python ../scripts/seed_markets.py
+
+# 6. Run the frontend
+cd ../frontend && bun install && bun dev
+```
+
+Or use the Makefile:
+
+```bash
+make setup    # uv sync
+make seed     # demo data
+make run      # backend API on :8000
+make frontend # frontend on :3000
+make test     # pytest
 ```
 
 ---
@@ -80,17 +95,17 @@ open http://localhost:3000
 └────────────────────────┬────────────────────────────────┘
                          │ HTTP
 ┌────────────────────────▼────────────────────────────────┐
-│  FastAPI Backend  (port 8000)                           │
-│  POST /backtest/run → Celery task → Redis               │
+│  FastAPI Backend  (port 8000, uv + uvicorn)             │
+│  POST /backtest/run → in-process background task        │
 │  GET  /results/{id}  ← poll status                      │
 └──────────┬──────────────────────┬───────────────────────┘
-           │ asyncpg              │ Celery
+           │ aiosqlite            │ background thread
 ┌──────────▼──────────┐  ┌───────▼───────────────────────┐
-│  TimescaleDB (pg15) │  │  Celery Worker                │
-│  • markets          │  │  • loads price_history        │
-│  • price_history    │  │  • runs pandas backtest       │
-│  • backtest_runs    │  │  • saves metrics + trades     │
-└─────────────────────┘  └───────────────────────────────┘
+│  SQLite (data.db)   │  │  pandas backtest engine        │
+│  • markets          │  │  • loads price_history         │
+│  • price_history    │  │  • runs backtest + metrics     │
+│  • backtest_runs    │  └───────────────────────────────┘
+└─────────────────────┘
 ```
 
 ---
@@ -168,14 +183,17 @@ stake_pct: 0.05    # 5% of capital per trade
 ```bash
 # Backend tests
 cd backend
-pip install -r requirements.txt
-pytest tests/ -v
+uv sync
+uv run pytest tests/ -v
 
-# Backend hot-reload (without Docker)
-uvicorn main:app --reload
+# Backend hot-reload
+uv run uvicorn main:app --reload
+
+# Seed demo data
+uv run python ../scripts/seed_markets.py
 
 # Sync data manually
-python sync_gamma.py
+uv run python sync_gamma.py
 ```
 
 ---

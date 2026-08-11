@@ -56,7 +56,7 @@ class BacktestRunStatus(BaseModel):
     run_id: str
     status: str
     progress_pct: float = 0.0
-    created_at: datetime
+    created_at: str
 
 
 class EntryConfig(BaseModel):

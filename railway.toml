@@ -1,6 +1,3 @@
 # Railway monorepo — configure Root Directory per service in Railway dashboard:
-#   backend service   → Root Directory: backend/
-#   celery-worker     → Root Directory: backend/  (start: celery -A tasks worker --loglevel=info)
-#   frontend service  → Root Directory: frontend/
-#
-# Each service uses its own railway.json from its subdirectory.
+#   backend  → Root Directory: backend/  (start: uv run uvicorn main:app --host 0.0.0.0 --port $PORT)
+#   frontend → Root Directory: frontend/

@@ -16,9 +16,9 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
 
-from db import close_pool, get_pool, init_db
+from db import close_pool, get_pool, init_db, to_iso
 from models import BacktestRequest, BacktestRunStatus, HealthResponse, SweepRequest
-from tasks import run_backtest_task, _execute_sweep_bg
+from tasks import _execute, _execute_sweep_bg
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ async def health() -> HealthResponse:
         latest_row = await conn.fetchrow(
             "SELECT timestamp FROM price_history ORDER BY timestamp DESC LIMIT 1"
         )
-    latest_price = latest_row["timestamp"].isoformat() if latest_row else None
+    latest_price = to_iso(latest_row["timestamp"]) if latest_row else None
     return HealthResponse(
         status="ok",
         market_count=market_count,
@@ -147,21 +147,15 @@ async def run_backtest_endpoint(
 
         await conn.execute(
             """
-            INSERT INTO backtest_runs (run_id, strategy_name, strategy_config, status)
-            VALUES ($1, $2, $3, 'pending')
+            INSERT INTO backtest_runs (run_id, strategy_name, strategy_config, status, created_at)
+            VALUES ($1, $2, $3, 'pending', NOW())
             """,
             run_id,
             config.get("name", req.strategy_name or "custom"),
             json.dumps(config),
         )
 
-    try:
-        run_backtest_task.delay(run_id, config)
-    except Exception:
-        # Celery not available — run in-process via FastAPI BackgroundTasks
-        from tasks import _execute
-        background_tasks.add_task(_execute, run_id, config)
-
+    background_tasks.add_task(_execute, run_id, config)
     return {"run_id": run_id}
 
 
@@ -179,7 +173,7 @@ async def get_status(run_id: str) -> BacktestRunStatus:
         run_id=row["run_id"],
         status=row["status"],
         progress_pct=float(row["progress_pct"] or 0),
-        created_at=row["created_at"],
+        created_at=to_iso(row["created_at"]) or "",
     )
 
 
@@ -210,8 +204,8 @@ async def get_results(run_id: str) -> dict[str, Any]:
         "metrics": json.loads(row["metrics"]) if row["metrics"] else None,
         "equity_curve": json.loads(row["equity_curve"]) if row["equity_curve"] else [],
         "trades": json.loads(row["trades"]) if row["trades"] else [],
-        "created_at": row["created_at"].isoformat(),
-        "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
+        "created_at": to_iso(row["created_at"]),
+        "completed_at": to_iso(row["completed_at"]),
         "error": row["error"],
     }
 
@@ -318,7 +312,7 @@ async def reset_stuck_runs() -> dict[str, Any]:
             "UPDATE backtest_runs SET status='failed', error='Server restarted', completed_at=NOW() "
             "WHERE status IN ('pending', 'running')"
         )
-    count = int(result.split()[-1])
+    count = int(result.rowcount)
     return {"reset": count}
 
 
@@ -694,8 +688,8 @@ async def run_sweep(
 
         await conn.execute(
             """
-            INSERT INTO backtest_sweeps (sweep_id, name, base_config, status, total_runs)
-            VALUES ($1, $2, $3, 'running', $4)
+            INSERT INTO backtest_sweeps (sweep_id, name, base_config, status, total_runs, created_at)
+            VALUES ($1, $2, $3, 'running', $4, NOW())
             """,
             sweep_id,
             req.name,
@@ -742,7 +736,7 @@ async def get_sweep(sweep_id: str) -> dict[str, Any]:
             SELECT run_id, strategy_name, strategy_config, status, metrics, completed_at, error
             FROM backtest_runs WHERE sweep_id=$1
             ORDER BY
-                CASE WHEN metrics IS NOT NULL THEN (metrics->>'roi_pct')::float ELSE -999999 END DESC
+                CASE WHEN metrics IS NOT NULL THEN json_extract(metrics, '$.roi_pct') ELSE -999999 END DESC
             """,
             sweep_id,
         )
@@ -756,7 +750,7 @@ async def get_sweep(sweep_id: str) -> dict[str, Any]:
             "params": _describe_params(cfg),
             "status": r["status"],
             "metrics": json.loads(r["metrics"]) if r["metrics"] else None,
-            "completed_at": r["completed_at"].isoformat() if r["completed_at"] else None,
+            "completed_at": to_iso(r["completed_at"]),
             "error": r["error"],
         })
 
@@ -766,8 +760,8 @@ async def get_sweep(sweep_id: str) -> dict[str, Any]:
         "status": sweep_row["status"],
         "total_runs": sweep_row["total_runs"],
         "done_runs": sweep_row["done_runs"],
-        "created_at": sweep_row["created_at"].isoformat(),
-        "completed_at": sweep_row["completed_at"].isoformat() if sweep_row["completed_at"] else None,
+        "created_at": to_iso(sweep_row["created_at"]),
+        "completed_at": to_iso(sweep_row["completed_at"]),
         "runs": runs,
     }
 

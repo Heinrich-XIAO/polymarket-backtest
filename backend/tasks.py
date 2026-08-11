@@ -1,71 +1,58 @@
-"""Celery tasks for async backtest execution."""
+"""Background task execution for backtests (in-process — no Celery/Redis/Docker)."""
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import os
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-import asyncpg
-from celery import Celery
+from db import get_pool
 
 from backtest import StrategyParams, run_backtest
 
 logger = logging.getLogger(__name__)
 
-celery_app = Celery(
-    "polymarket_backtest",
-    broker=os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0"),
-    backend=os.environ.get("CELERY_RESULT_BACKEND", "redis://redis:6379/1"),
-)
-celery_app.conf.update(
-    task_serializer="json",
-    result_serializer="json",
-    accept_content=["json"],
-    task_track_started=True,
-    worker_prefetch_multiplier=1,
-    task_acks_late=True,
-)
 
-
-def _run(coro):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+def _parse_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
     try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
 
 
 async def _load_price_data(
-    pool: asyncpg.Pool,
-    market_ids: list[str],
+    pool,
+    market_ids: list[str] | None,
     start_date: datetime | None,
     end_date: datetime | None,
 ):
     import pandas as pd
 
-    ph_params: list = [market_ids]
-    ph_where = ["market_id = ANY($1)"]
+    where: list[str] = []
+    params: list = []
+    if market_ids is not None:
+        placeholders = ",".join("?" for _ in market_ids)
+        where.append(f"market_id IN ({placeholders})")
+        params.extend(market_ids)
     if start_date:
-        ph_params.append(start_date)
-        ph_where.append(f"timestamp >= ${len(ph_params)}")
+        where.append("timestamp >= ?")
+        params.append(start_date)
     if end_date:
-        ph_params.append(end_date)
-        ph_where.append(f"timestamp <= ${len(ph_params)}")
+        where.append("timestamp <= ?")
+        params.append(end_date)
 
-    where_sql = " AND ".join(ph_where)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             f"""
             SELECT market_id, timestamp, price_yes, volume
             FROM price_history
-            WHERE {where_sql}
+            {where_sql}
             ORDER BY market_id, timestamp
             """,
-            *ph_params,
+            *params,
         )
 
     grouped: dict[str, list] = {}
@@ -85,12 +72,53 @@ async def _load_price_data(
     return price_dfs
 
 
+async def _load_market_meta(pool, params: StrategyParams) -> dict:
+    """Load market metadata, optionally filtered by strategy params."""
+    async with pool.acquire() as conn:
+        if params.market_ids:
+            placeholders = ",".join("?" for _ in params.market_ids)
+            market_rows = await conn.fetch(
+                f"""
+                SELECT m.id, m.category, m.end_date, m.volume, m.daily_volume
+                FROM markets m
+                INNER JOIN (SELECT DISTINCT market_id FROM price_history) ph ON m.id = ph.market_id
+                WHERE m.id IN ({placeholders})
+                """,
+                *params.market_ids,
+            )
+        else:
+            wheres = ["active = TRUE"]
+            q_params: list = []
+            if params.categories:
+                placeholders = ",".join("?" for _ in params.categories)
+                wheres.append(f"(category IS NULL OR category IN ({placeholders}))")
+                q_params.extend(params.categories)
+            if params.min_volume:
+                wheres.append("volume >= ?")
+                q_params.append(params.min_volume)
+            market_rows = await conn.fetch(
+                f"""
+                SELECT m.id, m.category, m.end_date, m.volume, m.daily_volume
+                FROM markets m
+                INNER JOIN (SELECT DISTINCT market_id FROM price_history) ph ON m.id = ph.market_id
+                WHERE {' AND '.join(wheres)}
+                """,
+                *q_params,
+            )
+
+    return {
+        r["id"]: {
+            "category": r["category"],
+            "end_date": _parse_dt(r["end_date"]),
+            "volume": float(r["volume"] or 0),
+            "daily_volume": float(r["daily_volume"] or 0),
+        }
+        for r in market_rows
+    }
+
+
 async def _execute(run_id: str, config: dict) -> None:
-    pool = await asyncpg.create_pool(
-        dsn=os.environ["DATABASE_URL"],
-        min_size=1,
-        max_size=4,
-    )
+    pool = await get_pool()
     try:
         async with pool.acquire() as conn:
             await conn.execute(
@@ -102,49 +130,7 @@ async def _execute(run_id: str, config: dict) -> None:
         start_date = datetime.fromisoformat(config["start_date"]) if config.get("start_date") else None
         end_date = datetime.fromisoformat(config["end_date"]) if config.get("end_date") else None
 
-        # Load market metadata
-        async with pool.acquire() as conn:
-            if params.market_ids:
-                # User explicitly selected markets — load them regardless of active/volume status
-                market_rows = await conn.fetch(
-                    """
-                    SELECT m.id, m.category, m.end_date, m.volume, m.daily_volume
-                    FROM markets m
-                    INNER JOIN (SELECT DISTINCT market_id FROM price_history) ph ON m.id = ph.market_id
-                    WHERE m.id = ANY($1)
-                    """,
-                    params.market_ids,
-                )
-            else:
-                q_params: list = []
-                wheres = ["active = TRUE"]
-                if params.categories:
-                    q_params.append(params.categories)
-                    wheres.append(
-                        f"(category IS NULL OR category = ANY(${len(q_params)}))"
-                    )
-                if params.min_volume:
-                    q_params.append(params.min_volume)
-                    wheres.append(f"volume >= ${len(q_params)}")
-                market_rows = await conn.fetch(
-                    f"""
-                    SELECT m.id, m.category, m.end_date, m.volume, m.daily_volume
-                    FROM markets m
-                    INNER JOIN (SELECT DISTINCT market_id FROM price_history) ph ON m.id = ph.market_id
-                    WHERE {' AND '.join(wheres)}
-                    """,
-                    *q_params,
-                )
-
-        market_meta = {
-            r["id"]: {
-                "category": r["category"],
-                "end_date": r["end_date"],
-                "volume": float(r["volume"] or 0),
-                "daily_volume": float(r["daily_volume"] or 0),
-            }
-            for r in market_rows
-        }
+        market_meta = await _load_market_meta(pool, params)
 
         async with pool.acquire() as conn:
             await conn.execute(
@@ -160,13 +146,7 @@ async def _execute(run_id: str, config: dict) -> None:
                 "UPDATE backtest_runs SET progress_pct=60 WHERE run_id=$1", run_id
             )
 
-        # Run CPU-bound simulation in a thread to avoid blocking the asyncio event loop
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            result = await loop.run_in_executor(
-                executor,
-                lambda: run_backtest(price_data, market_meta, params, start_date, end_date),
-            )
+        result = run_backtest(price_data, market_meta, params, start_date, end_date)
 
         async with pool.acquire() as conn:
             await conn.execute(
@@ -195,25 +175,14 @@ async def _execute(run_id: str, config: dict) -> None:
                 run_id,
                 str(exc)[:2000],
             )
-    finally:
-        await pool.close()
-
-
-@celery_app.task(name="tasks.run_backtest_task", bind=True, max_retries=2)
-def run_backtest_task(self, run_id: str, config: dict) -> str:
-    """Celery worker task: execute a full backtest run."""
-    _run(_execute(run_id, config))
-    return run_id
 
 
 async def _load_all_market_data(
-    pool: asyncpg.Pool,
+    pool,
     start_date: datetime | None,
     end_date: datetime | None,
 ):
     """Load ALL markets with price history (no category/volume filter) for sweep reuse."""
-    import pandas as pd
-
     async with pool.acquire() as conn:
         market_rows = await conn.fetch(
             """
@@ -226,14 +195,14 @@ async def _load_all_market_data(
     market_meta = {
         r["id"]: {
             "category": r["category"],
-            "end_date": r["end_date"],
+            "end_date": _parse_dt(r["end_date"]),
             "volume": float(r["volume"] or 0),
             "daily_volume": float(r["daily_volume"] or 0),
         }
         for r in market_rows
     }
 
-    price_data = await _load_price_data(pool, list(market_meta.keys()), start_date, end_date)
+    price_data = await _load_price_data(pool, None, start_date, end_date)
     return market_meta, price_data
 
 
@@ -244,17 +213,11 @@ async def _execute_sweep_bg(
     end_date: datetime | None,
 ) -> None:
     """Run all sweep combinations sequentially, reusing shared price data."""
-    pool = await asyncpg.create_pool(
-        dsn=os.environ["DATABASE_URL"],
-        min_size=1,
-        max_size=4,
-    )
+    pool = await get_pool()
     try:
         logger.info("Sweep %s: loading market data for %d combinations", sweep_id, len(run_id_config_pairs))
         market_meta, price_data = await _load_all_market_data(pool, start_date, end_date)
         logger.info("Sweep %s: %d markets, %d price series loaded", sweep_id, len(market_meta), len(price_data))
-
-        loop = asyncio.get_event_loop()
 
         for i, (run_id, config) in enumerate(run_id_config_pairs):
             try:
@@ -265,11 +228,7 @@ async def _execute_sweep_bg(
 
                 params = StrategyParams.from_dict(config)
 
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    result = await loop.run_in_executor(
-                        executor,
-                        lambda p=params: run_backtest(price_data, market_meta, p, start_date, end_date),
-                    )
+                result = run_backtest(price_data, market_meta, params, start_date, end_date)
 
                 async with pool.acquire() as conn:
                     await conn.execute(
@@ -322,5 +281,3 @@ async def _execute_sweep_bg(
                 )
         except Exception:
             pass
-    finally:
-        await pool.close()

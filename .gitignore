@@ -13,6 +13,9 @@ build/
 venv/
 .venv/
 
+# Local SQLite database
+backend/data/
+
 # Node / Next.js
 node_modules/
 .next/

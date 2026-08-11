@@ -1,13 +1,18 @@
-.PHONY: setup sync seed test demo logs clean
+.PHONY: setup sync seed test run frontend demo logs health down clean
 
-# Start all services and build images
+# Create the uv venv and install backend dependencies (no Docker)
 setup:
-	docker compose up --build -d
+	cd backend && uv sync
 	@echo ""
-	@echo "  Backend API:  http://localhost:8000/docs"
-	@echo "  Frontend UI:  http://localhost:3000"
-	@echo ""
-	@echo "  Next: run 'make sync' to load market data, or 'make seed' for demo data."
+	@echo "  Next: 'make run' to start the API, or 'make seed' for demo data."
+
+# Run the backend API directly with uv (no Docker)
+run:
+	cd backend && uv run uvicorn main:app --reload --port 8000
+
+# Run the frontend dev server
+frontend:
+	cd frontend && bun dev
 
 # Pull live data from Polymarket Gamma API (200 markets, runs in background)
 sync:
@@ -15,11 +20,11 @@ sync:
 
 # Seed database with synthetic data for demo/testing (no internet needed)
 seed:
-	docker compose exec backend python /app/scripts/seed_markets.py
+	cd backend && uv run python ../scripts/seed_markets.py
 
 # Run backend unit tests
 test:
-	docker compose exec backend pytest tests/ -v --tb=short
+	cd backend && uv run pytest tests/ -v --tb=short
 
 # Open the UI in the default browser
 demo:
@@ -32,15 +37,11 @@ demo:
 health:
 	curl -s http://localhost:8000/health | python3 -m json.tool
 
-# Tail logs for all services
+# Tail backend logs
 logs:
-	docker compose logs -f
+	cd backend && uv run uvicorn main:app --port 8000 --log-level info
 
-# Stop and remove containers (keeps DB volume)
-down:
-	docker compose down
-
-# Full reset — removes DB volume too
+# Remove the local SQLite database (full reset)
 clean:
-	docker compose down -v
-	@echo "All containers and volumes removed."
+	rm -f backend/data/polymarket.db
+	@echo "Database removed."

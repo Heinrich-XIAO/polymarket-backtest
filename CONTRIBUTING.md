@@ -6,8 +6,8 @@ Thank you for your interest in contributing!
 
 1. Fork the repository and clone your fork.
 2. Copy `.env.example` to `.env`.
-3. Start the stack: `docker compose up --build`.
-4. Run tests: `cd backend && pip install -r requirements.txt && pytest tests/ -v`.
+3. Start the backend: `cd backend && uv sync && uv run uvicorn main:app --reload`.
+4. Run tests: `cd backend && uv run pytest tests/ -v`.
 
 ## Adding a Strategy
 

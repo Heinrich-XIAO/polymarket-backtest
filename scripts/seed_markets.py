@@ -2,23 +2,22 @@
 Seed the database with synthetic market data for local demo/testing.
 
 Usage (from project root):
-    docker compose exec backend python scripts/seed_markets.py
-
-Or standalone (with DATABASE_URL set):
-    python scripts/seed_markets.py
+    uv run --directory backend python ../scripts/seed_markets.py
 """
 from __future__ import annotations
 
 import asyncio
 import os
 import random
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-import asyncpg
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL", "postgresql://poly:secret@localhost:5432/polymarket"
-)
+from db import get_pool, init_db
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///data/polymarket.db")
 
 CATEGORIES = ["politics", "crypto", "economics", "sports"]
 
@@ -67,7 +66,7 @@ def _random_price_walk(
     return rows
 
 
-async def seed(pool: asyncpg.Pool) -> None:
+async def seed(pool) -> None:
     now = datetime.now(tz=timezone.utc)
     market_rows = []
     for i, (question, category, resolution_days) in enumerate(SAMPLE_MARKETS):
@@ -108,7 +107,8 @@ async def seed(pool: asyncpg.Pool) -> None:
 
 
 async def main() -> None:
-    pool = await asyncpg.create_pool(dsn=DATABASE_URL, min_size=1, max_size=3)
+    await init_db()
+    pool = await get_pool()
     try:
         await seed(pool)
         print("Seed complete. Run a backtest at http://localhost:3000/strategy")
