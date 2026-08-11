@@ -2,12 +2,7 @@
 
 import { useEffect, useRef, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { z } from "zod";
 import { API, fetchWithRetry } from "../lib/api";
-
-const RunSchema = z.object({
-  run_id: z.string(),
-});
 
 interface Strategy {
   file: string;
@@ -33,7 +28,7 @@ function StrategyForm() {
   const preselect = searchParams.get("name") || "";
 
   const [strategies, setStrategies] = useState<Strategy[]>([]);
-  const [selected, setSelected] = useState(preselect);
+  const [selected, setSelected] = useState<string[]>(preselect ? [preselect] : []);
   const [capital, setCapital] = useState("1000");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -55,7 +50,7 @@ function StrategyForm() {
       .then((r) => r.json())
       .then((data) => {
         setStrategies(Array.isArray(data) ? data : []);
-        if (!selected && data.length > 0) setSelected(data[0].file);
+        if (selected.length === 0 && data.length > 0) setSelected([data[0].file]);
       })
       .catch(() => setError("Failed to load strategies from backend."));
   }, []);
@@ -108,7 +103,20 @@ function StrategyForm() {
     setSelectedMarkets((prev) => prev.filter((m) => m.id !== id));
   }
 
-  const selectedStrategy = strategies.find((s) => s.file === selected);
+  const selectedStrategies = strategies.filter((s) => selected.includes(s.file));
+
+  function toggleStrategy(file: string) {
+    setSelected((prev) =>
+      prev.includes(file) ? prev.filter((f) => f !== file) : [...prev, file]
+    );
+  }
+
+  const allSelected = strategies.length > 0 && selected.length === strategies.length;
+  const someSelected = selected.length > 0 && !allSelected;
+
+  function toggleAll() {
+    setSelected(allSelected ? [] : strategies.map((s) => s.file));
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -123,7 +131,7 @@ function StrategyForm() {
     }
 
     const body: Record<string, unknown> = {
-      strategy_name: selected,
+      strategy_names: selected,
       initial_capital: capitalNum,
     };
     if (startDate) body.start_date = new Date(startDate).toISOString();
@@ -145,8 +153,10 @@ function StrategyForm() {
         throw new Error(err.detail || `HTTP ${resp.status}`);
       }
 
-      const data = RunSchema.parse(await resp.json());
-      router.push(`/results?id=${data.run_id}`);
+      const data = await resp.json();
+      const runIds: string[] = data?.run_ids ?? (data?.run_id ? [data.run_id] : []);
+      if (runIds.length === 0) throw new Error("Backend did not return a run ID");
+      router.push(`/results?id=${runIds.join(",")}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
       setWarmingUp(false);
@@ -175,23 +185,35 @@ function StrategyForm() {
       <form onSubmit={handleSubmit} className="space-y-5">
         {/* Strategy Selector */}
         <div className="card space-y-4">
-          <h2 className="font-semibold text-slate-200">Strategy</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold text-slate-200">Strategy</h2>
+            <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                ref={(el) => { if (el) el.indeterminate = someSelected; }}
+                onChange={toggleAll}
+                className="accent-blue-500 h-4 w-4 cursor-pointer"
+              />
+              Select all
+            </label>
+          </div>
           <div className="grid grid-cols-1 gap-2">
             {strategies.map((s) => (
               <label
                 key={s.file}
                 className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                  selected === s.file
+                  selected.includes(s.file)
                     ? "border-blue-500 bg-blue-500/10"
                     : "border-slate-700 hover:border-slate-500"
                 }`}
               >
                 <input
-                  type="radio"
+                  type="checkbox"
                   name="strategy"
                   value={s.file}
-                  checked={selected === s.file}
-                  onChange={() => setSelected(s.file)}
+                  checked={selected.includes(s.file)}
+                  onChange={() => toggleStrategy(s.file)}
                   className="mt-0.5 accent-blue-500"
                 />
                 <div>
@@ -204,28 +226,33 @@ function StrategyForm() {
         </div>
 
         {/* Selected strategy details */}
-        {selectedStrategy && (
-          <div className="card bg-slate-900/50 text-sm space-y-2">
-            <div className="flex gap-4 text-slate-400">
-              <span>
-                Entry: <code className="text-green-400">{selectedStrategy.entry_condition}</code>
-              </span>
-            </div>
-            <div className="flex gap-4 text-slate-400">
-              {selectedStrategy.take_profit != null && (
-                <span>Take Profit: <span className="text-green-400">{(selectedStrategy.take_profit * 100).toFixed(0)}%</span></span>
-              )}
-              {selectedStrategy.stop_loss != null && (
-                <span>Stop Loss: <span className="text-red-400">{(selectedStrategy.stop_loss * 100).toFixed(0)}%</span></span>
-              )}
-            </div>
-            {selectedStrategy.categories.length > 0 && (
-              <div className="flex gap-1">
-                {selectedStrategy.categories.map((c) => (
-                  <span key={c} className="badge bg-slate-700 text-slate-300">{c}</span>
-                ))}
+        {selectedStrategies.length > 0 && (
+          <div className="card bg-slate-900/50 text-sm space-y-3">
+            {selectedStrategies.map((s) => (
+              <div key={s.file} className="space-y-1">
+                <div className="font-medium text-slate-200">{s.name}</div>
+                <div className="flex gap-4 text-slate-400">
+                  <span>
+                    Entry: <code className="text-green-400">{s.entry_condition}</code>
+                  </span>
+                </div>
+                <div className="flex gap-4 text-slate-400">
+                  {s.take_profit != null && (
+                    <span>Take Profit: <span className="text-green-400">{(s.take_profit * 100).toFixed(0)}%</span></span>
+                  )}
+                  {s.stop_loss != null && (
+                    <span>Stop Loss: <span className="text-red-400">{(s.stop_loss * 100).toFixed(0)}%</span></span>
+                  )}
+                </div>
+                {s.categories.length > 0 && (
+                  <div className="flex gap-1">
+                    {s.categories.map((c) => (
+                      <span key={c} className="badge bg-slate-700 text-slate-300">{c}</span>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
+            ))}
           </div>
         )}
 
@@ -364,7 +391,7 @@ function StrategyForm() {
           )}
         </div>
 
-        <button type="submit" disabled={loading || !selected} className="btn-primary w-full text-center">
+        <button type="submit" disabled={loading || selected.length === 0} className="btn-primary w-full text-center">
           {loading ? (
             <span className="flex items-center justify-center gap-2">
               <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
@@ -376,7 +403,9 @@ function StrategyForm() {
           ) : (
             selectedMarkets.length > 0
               ? `Run Backtest on ${selectedMarkets.length} market${selectedMarkets.length !== 1 ? "s" : ""}`
-              : "Run Backtest"
+              : selected.length > 1
+                ? `Run Backtest (${selected.length} strategies)`
+                : "Run Backtest"
           )}
         </button>
       </form>

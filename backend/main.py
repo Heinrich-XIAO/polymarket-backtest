@@ -113,18 +113,67 @@ async def get_strategy(name: str) -> dict[str, Any]:
 async def run_backtest_endpoint(
     req: BacktestRequest,
     background_tasks: BackgroundTasks,
-) -> dict[str, str]:
-    """Start a backtest run. Returns run_id for polling."""
-    if req.strategy_name:
-        yaml_file = STRATEGIES_DIR / f"{req.strategy_name}.yaml"
-        if not yaml_file.exists():
-            raise HTTPException(404, f"Strategy '{req.strategy_name}' not found")
-        config: dict = yaml.safe_load(yaml_file.read_text(encoding="utf-8"))
-    elif req.strategy_config:
-        config = req.strategy_config.model_dump()
+) -> dict[str, Any]:
+    """Start one or more backtest runs. Returns run_id(s) for polling."""
+    if req.strategy_names:
+        names = req.strategy_names
+    elif req.strategy_name:
+        names = [req.strategy_name]
     else:
-        raise HTTPException(400, "Provide strategy_name or strategy_config")
+        names = []
 
+    if not names and not req.strategy_config:
+        raise HTTPException(400, "Provide strategy_name(s) or strategy_config")
+
+    pool = await get_pool()
+    # Limit to 2 concurrent backtests to prevent OOM on free tier
+    async with pool.acquire() as conn:
+        active = int(
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM backtest_runs WHERE status IN ('pending','running')"
+            ) or 0
+        )
+        if active >= 2:
+            raise HTTPException(429, "Too many concurrent backtests — please wait for a running test to finish")
+
+    run_ids: list[str] = []
+    for name in names:
+        yaml_file = STRATEGIES_DIR / f"{name}.yaml"
+        if not yaml_file.exists():
+            raise HTTPException(404, f"Strategy '{name}' not found")
+        config: dict = yaml.safe_load(yaml_file.read_text(encoding="utf-8"))
+        config["initial_capital"] = req.initial_capital
+        if req.market_ids:
+            config["market_ids"] = req.market_ids
+        if req.start_date:
+            config["start_date"] = req.start_date.isoformat()
+        if req.end_date:
+            config["end_date"] = req.end_date.isoformat()
+
+        run_id = str(uuid.uuid4())
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO backtest_runs (run_id, strategy_name, strategy_config, status, created_at)
+                VALUES ($1, $2, $3, 'pending', NOW())
+                """,
+                run_id,
+                config.get("name", name),
+                json.dumps(config),
+            )
+
+        background_tasks.add_task(_execute, run_id, config)
+        run_ids.append(run_id)
+
+    if run_ids:
+        if len(run_ids) == 1:
+            return {"run_id": run_ids[0]}
+        return {"run_ids": run_ids}
+
+    # Single custom config
+    if req.strategy_config is None:
+        raise HTTPException(400, "Provide strategy_name(s) or strategy_config")
+    config = req.strategy_config.model_dump()
     config["initial_capital"] = req.initial_capital
     if req.market_ids:
         config["market_ids"] = req.market_ids
@@ -134,24 +183,14 @@ async def run_backtest_endpoint(
         config["end_date"] = req.end_date.isoformat()
 
     run_id = str(uuid.uuid4())
-    pool = await get_pool()
     async with pool.acquire() as conn:
-        # Limit to 2 concurrent backtests to prevent OOM on free tier
-        active = int(
-            await conn.fetchval(
-                "SELECT COUNT(*) FROM backtest_runs WHERE status IN ('pending','running')"
-            ) or 0
-        )
-        if active >= 2:
-            raise HTTPException(429, "Too many concurrent backtests — please wait for a running test to finish")
-
         await conn.execute(
             """
             INSERT INTO backtest_runs (run_id, strategy_name, strategy_config, status, created_at)
             VALUES ($1, $2, $3, 'pending', NOW())
             """,
             run_id,
-            config.get("name", req.strategy_name or "custom"),
+            config.get("name", "custom"),
             json.dumps(config),
         )
 

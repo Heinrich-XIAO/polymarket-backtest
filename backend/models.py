@@ -90,6 +90,7 @@ class StrategyConfig(BaseModel):
 
 class BacktestRequest(BaseModel):
     strategy_name: str | None = None
+    strategy_names: list[str] = []
     strategy_config: StrategyConfig | None = None
     start_date: datetime | None = None
     end_date: datetime | None = None

@@ -72,71 +72,7 @@ function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "2-digit" });
 }
 
-function ResultsContent() {
-  const searchParams = useSearchParams();
-  const id = searchParams.get("id");
-  const [result, setResult] = useState<Result | null>(null);
-  const [polling, setPolling] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchResult = useCallback(async () => {
-    if (!id) { setError("No run ID provided"); setPolling(false); return; }
-    try {
-      const resp = await fetch(`${API}/results/${id}`);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data: Result = await resp.json();
-      setResult(data);
-      if (data.status === "done" || data.status === "failed") setPolling(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error fetching results");
-      setPolling(false);
-    }
-  }, [id]);
-
-  useEffect(() => { fetchResult(); }, [fetchResult]);
-
-  useEffect(() => {
-    if (!polling) return;
-    const interval = setInterval(fetchResult, 1500);
-    return () => clearInterval(interval);
-  }, [polling, fetchResult]);
-
-  if (error) {
-    return (
-      <div className="card border-red-500/50 text-red-400 max-w-lg mx-auto">
-        <p className="font-medium mb-2">Error loading results</p>
-        <p className="text-sm">{error}</p>
-        <Link href="/" className="btn-secondary mt-4 inline-block">Back to Dashboard</Link>
-      </div>
-    );
-  }
-
-  if (!result || (result.status !== "done" && result.status !== "failed")) {
-    const progress = result?.status === "running" ? "Running..." : "Queued...";
-    return (
-      <div className="flex flex-col items-center justify-center py-20 gap-4 text-slate-400">
-        <svg className="animate-spin h-10 w-10 text-blue-500" viewBox="0 0 24 24" fill="none">
-          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-        </svg>
-        <div className="text-lg font-medium">{progress}</div>
-        <div className="text-sm">Run ID: <code className="text-blue-400">{id}</code></div>
-      </div>
-    );
-  }
-
-  if (result.status === "failed") {
-    return (
-      <div className="max-w-lg mx-auto space-y-4">
-        <div className="card border-red-500/50">
-          <p className="text-red-400 font-semibold mb-1">Backtest Failed</p>
-          <p className="text-sm text-slate-400">{result.error || "Unknown error"}</p>
-        </div>
-        <Link href="/strategy" className="btn-secondary inline-block">Try Again</Link>
-      </div>
-    );
-  }
-
+function RunDetail({ result }: { result: Result }) {
   const m = result.metrics!;
   const chartData = result.equity_curve.map((pt) => ({
     date: fmtDate(pt.timestamp),
@@ -155,10 +91,9 @@ function ResultsContent() {
           </p>
         </div>
         <div className="flex gap-2">
-          <a href={`${API}/results/${id}/export`} className="btn-secondary text-sm" download>
+          <a href={`${API}/results/${result.run_id}/export`} className="btn-secondary text-sm" download>
             Export CSV
           </a>
-          <Link href="/strategy" className="btn-primary text-sm">New Backtest</Link>
         </div>
       </div>
 
@@ -243,6 +178,170 @@ function ResultsContent() {
           No trades were executed. Try different strategy parameters or sync more market data.
         </div>
       )}
+    </div>
+  );
+}
+
+function ComparisonTable({ results }: { results: Result[] }) {
+  const done = results.filter((r) => r.status === "done" && r.metrics);
+  if (done.length < 2) return null;
+  const rows: { label: string; render: (m: Metrics) => string; cls?: (m: Metrics) => string }[] = [
+    { label: "Total PnL", render: (m) => `${m.total_pnl >= 0 ? "+" : ""}$${fmt(m.total_pnl)}`, cls: (m) => (m.total_pnl >= 0 ? "text-green-400" : "text-red-400") },
+    { label: "ROI", render: (m) => `${m.roi_pct >= 0 ? "+" : ""}${fmt(m.roi_pct)}%`, cls: (m) => (m.roi_pct >= 0 ? "text-green-400" : "text-red-400") },
+    { label: "Max Drawdown", render: (m) => `${fmt(m.max_drawdown_pct)}%`, cls: () => "text-red-400" },
+    { label: "Win Rate", render: (m) => `${fmt(m.win_rate_pct)}%`, cls: (m) => (m.win_rate_pct >= 50 ? "text-green-400" : "text-yellow-400") },
+    { label: "Total Trades", render: (m) => String(m.total_trades), cls: () => "text-slate-100" },
+    { label: "Sharpe Ratio", render: (m) => (m.sharpe_ratio != null ? fmt(m.sharpe_ratio) : "N/A"), cls: (m) => (m.sharpe_ratio != null && m.sharpe_ratio >= 1 ? "text-green-400" : "text-slate-400") },
+  ];
+  return (
+    <div className="card">
+      <h2 className="font-semibold text-slate-200 mb-4">Strategy Comparison</h2>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-slate-400 border-b border-slate-700">
+              <th className="pb-2 pr-4 font-medium">Metric</th>
+              {done.map((r) => (
+                <th key={r.run_id} className="pb-2 pr-4 font-medium">{r.strategy_name}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-800">
+            {rows.map((row) => (
+              <tr key={row.label}>
+                <td className="py-2 pr-4 text-slate-400">{row.label}</td>
+                {done.map((r) => (
+                  <td key={r.run_id} className={`py-2 pr-4 ${row.cls?.(r.metrics!) ?? ""}`}>{row.render(r.metrics!)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function ResultsContent() {
+  const searchParams = useSearchParams();
+  const ids = (searchParams.get("id") || "").split(",").filter(Boolean);
+  const idKey = ids.join(",");
+  const [results, setResults] = useState<Result[]>([]);
+  const [polling, setPolling] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchResults = useCallback(async () => {
+    if (ids.length === 0) { setError("No run ID provided"); setPolling(false); return; }
+    try {
+      const fetched = await Promise.all(
+        ids.map(async (id) => {
+          const resp = await fetch(`${API}/results/${id}`);
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          return resp.json() as Promise<Result>;
+        })
+      );
+      setResults(fetched);
+      if (fetched.every((r) => r.status === "done" || r.status === "failed")) setPolling(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error fetching results");
+      setPolling(false);
+    }
+  }, [idKey]);
+
+  useEffect(() => { fetchResults(); }, [fetchResults]);
+
+  useEffect(() => {
+    if (!polling) return;
+    const interval = setInterval(fetchResults, 1500);
+    return () => clearInterval(interval);
+  }, [polling, fetchResults]);
+
+  if (error) {
+    return (
+      <div className="card border-red-500/50 text-red-400 max-w-lg mx-auto">
+        <p className="font-medium mb-2">Error loading results</p>
+        <p className="text-sm">{error}</p>
+        <Link href="/" className="btn-secondary mt-4 inline-block">Back to Dashboard</Link>
+      </div>
+    );
+  }
+
+  const allTerminal = results.length > 0 && results.every((r) => r.status === "done" || r.status === "failed");
+  if (!allTerminal) {
+    const running = results.filter((r) => r.status === "running").length;
+    const progress = running > 0 ? `Running ${running} backtest${running !== 1 ? "s" : ""}...` : "Queued...";
+    return (
+      <div className="flex flex-col items-center justify-center py-20 gap-4 text-slate-400">
+        <svg className="animate-spin h-10 w-10 text-blue-500" viewBox="0 0 24 24" fill="none">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+        </svg>
+        <div className="text-lg font-medium">{progress}</div>
+        <div className="text-sm">Runs: <code className="text-blue-400">{ids.join(", ")}</code></div>
+      </div>
+    );
+  }
+
+  const failed = results.filter((r) => r.status === "failed");
+  if (failed.length === results.length) {
+    return (
+      <div className="max-w-lg mx-auto space-y-4">
+        <div className="card border-red-500/50">
+          <p className="text-red-400 font-semibold mb-1">All Backtests Failed</p>
+          <p className="text-sm text-slate-400">{failed[0].error || "Unknown error"}</p>
+        </div>
+        <Link href="/strategy" className="btn-secondary inline-block">Try Again</Link>
+      </div>
+    );
+  }
+
+  const header = (
+    <div className="flex items-start justify-between">
+      <div>
+        <h1 className="text-2xl font-bold text-slate-100">
+          {results.length > 1 ? "Backtest Results" : results[0]?.strategy_name}
+        </h1>
+        <p className="text-slate-400 text-sm mt-1">
+          {results.length > 1
+            ? `${results.length} strategies · ${results.filter((r) => r.status === "done").length} completed`
+            : `Run <code className="text-blue-400">${results[0]?.run_id.slice(0, 8)}</code>`}
+        </p>
+      </div>
+      <div className="flex gap-2">
+        {results.filter((r) => r.status === "done").length > 1 && (
+          <Link href="/strategy" className="btn-secondary text-sm">New Backtest</Link>
+        )}
+        <Link href="/strategy" className="btn-primary text-sm">New Backtest</Link>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-8">
+      {header}
+      {failed.length > 0 && (
+        <div className="card border-amber-500/50">
+          <p className="text-amber-400 font-medium mb-1">
+            {failed.length} backtest{failed.length !== 1 ? "s" : ""} failed
+          </p>
+          {failed.map((r) => (
+            <p key={r.run_id} className="text-sm text-slate-400">
+              <span className="text-slate-200">{r.strategy_name}:</span> {r.error || "Unknown error"}
+            </p>
+          ))}
+        </div>
+      )}
+      <ComparisonTable results={results} />
+      {results.map((r, i) => (
+        <div key={r.run_id} className={results.length > 1 ? "border-t border-slate-800 pt-8" : ""}>
+          {i > 0 && <h2 className="text-lg font-semibold text-slate-200 mb-4">{r.strategy_name}</h2>}
+          {r.status === "failed" ? (
+            <div className="card border-red-500/50 text-sm text-red-400">{r.error || "Backtest failed"}</div>
+          ) : (
+            <RunDetail result={r} />
+          )}
+        </div>
+      ))}
     </div>
   );
 }
